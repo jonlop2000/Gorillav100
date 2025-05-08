@@ -1,0 +1,45 @@
+# === Godot Engine ===
+
+# import caches
+.import/
+
+# exported templates & presets
+export.cfg
+export_presets.cfg
+.export/
+
+# Godot 4 project metadata & caches
+.godot/
+
+# temporary files
+*.tmp
+*.log
+
+# per-asset import overrides
+*.import
+
+# === C# / Mono support (if you’re using GodotSharp) ===
+
+.mono/
+GodotSharp/
+bin/
+obj/
+
+# === OS-specific ===
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Linux
+*~
+
+# === IDE/Editor folders ===
+
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace

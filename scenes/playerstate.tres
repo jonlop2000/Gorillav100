@@ -1,0 +1,152 @@
+[gd_resource type="AnimationNodeStateMachine" load_steps=36 format=2]
+
+[sub_resource type="AnimationNodeAnimation" id=69]
+animation = "Death"
+
+[sub_resource type="AnimationNodeAnimation" id=64]
+animation = "Hit"
+
+[sub_resource type="AnimationNodeAnimation" id=59]
+animation = "Hook"
+
+[sub_resource type="AnimationNodeAnimation" id=45]
+animation = "Idle"
+
+[sub_resource type="AnimationNodeAnimation" id=46]
+animation = "JogFwd"
+
+[sub_resource type="AnimationNodeAnimation" id=49]
+animation = "Jump"
+
+[sub_resource type="AnimationNodeAnimation" id=54]
+animation = "Punch"
+
+[sub_resource type="AnimationNodeAnimation" id=74]
+animation = "StandToRoll"
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=47]
+xfade_time = 0.2
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=48]
+xfade_time = 0.2
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=50]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=51]
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=52]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=53]
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=55]
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=56]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=57]
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=58]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.2
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=60]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=61]
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=62]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=63]
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=65]
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=66]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=67]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=68]
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=70]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=71]
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=72]
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=73]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=75]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=76]
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=77]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=78]
+xfade_time = 0.1
+
+[sub_resource type="AnimationNodeStateMachine" id=24]
+states/Death/node = SubResource( 69 )
+states/Death/position = Vector2( -138.774, -391.183 )
+states/Hit/node = SubResource( 64 )
+states/Hit/position = Vector2( -373.774, -391.183 )
+states/Hook/node = SubResource( 59 )
+states/Hook/position = Vector2( -734.774, -180.183 )
+states/Idle/node = SubResource( 45 )
+states/Idle/position = Vector2( -264.774, -784.183 )
+states/JogFwd/node = SubResource( 46 )
+states/JogFwd/position = Vector2( -264.774, -14.183 )
+states/Jump/node = SubResource( 49 )
+states/Jump/position = Vector2( 209.226, -180.183 )
+states/Punch/node = SubResource( 54 )
+states/Punch/position = Vector2( -734.774, -645.183 )
+states/StandToRoll/node = SubResource( 74 )
+states/StandToRoll/position = Vector2( 209.226, -645.183 )
+transitions = [ "Idle", "JogFwd", SubResource( 47 ), "JogFwd", "Idle", SubResource( 48 ), "Jump", "Idle", SubResource( 50 ), "Idle", "Jump", SubResource( 51 ), "Jump", "JogFwd", SubResource( 52 ), "JogFwd", "Jump", SubResource( 53 ), "Idle", "Punch", SubResource( 55 ), "Punch", "Idle", SubResource( 56 ), "JogFwd", "Punch", SubResource( 57 ), "Punch", "JogFwd", SubResource( 58 ), "Hook", "Idle", SubResource( 60 ), "Idle", "Hook", SubResource( 61 ), "Hook", "JogFwd", SubResource( 62 ), "JogFwd", "Hook", SubResource( 63 ), "Idle", "Hit", SubResource( 65 ), "Hit", "Idle", SubResource( 66 ), "Hit", "JogFwd", SubResource( 67 ), "JogFwd", "Hit", SubResource( 68 ), "Death", "JogFwd", SubResource( 70 ), "JogFwd", "Death", SubResource( 71 ), "Idle", "Death", SubResource( 72 ), "Death", "Idle", SubResource( 73 ), "StandToRoll", "Idle", SubResource( 75 ), "Idle", "StandToRoll", SubResource( 76 ), "StandToRoll", "JogFwd", SubResource( 77 ), "JogFwd", "StandToRoll", SubResource( 78 ) ]
+start_node = "Idle"
+graph_offset = Vector2( -759.77, -853.183 )
+
+[resource]
+states/StateMachine/node = SubResource( 24 )
+states/StateMachine/position = Vector2( 580, 179 )
+start_node = "StateMachine"
+graph_offset = Vector2( 338, 55 )
