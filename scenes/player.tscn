@@ -2874,6 +2874,7 @@ xfade_time = 0.1
 
 [sub_resource type="AnimationNodeStateMachineTransition" id=96]
 switch_mode = 2
+auto_advance = true
 xfade_time = 0.2
 
 [sub_resource type="AnimationNodeStateMachineTransition" id=97]
@@ -2961,12 +2962,12 @@ states/StandToRoll/node = SubResource( 100 )
 states/StandToRoll/position = Vector2( -782.323, -919 )
 transitions = [ "Idle", "JogFwd", SubResource( 86 ), "JogFwd", "Idle", SubResource( 87 ), "Punch", "Idle", SubResource( 90 ), "Idle", "Punch", SubResource( 91 ), "Hook", "Idle", SubResource( 92 ), "Idle", "Hook", SubResource( 93 ), "Hook", "JogFwd", SubResource( 94 ), "JogFwd", "Hook", SubResource( 95 ), "Punch", "JogFwd", SubResource( 96 ), "JogFwd", "Punch", SubResource( 97 ), "StandToRoll", "Idle", SubResource( 101 ), "Idle", "StandToRoll", SubResource( 102 ), "Jump", "Idle", SubResource( 103 ), "Idle", "Jump", SubResource( 104 ), "StandToRoll", "JogFwd", SubResource( 106 ), "JogFwd", "StandToRoll", SubResource( 107 ), "Jump", "JogFwd", SubResource( 108 ), "JogFwd", "Jump", SubResource( 109 ), "Hit", "Idle", SubResource( 110 ), "Idle", "Hit", SubResource( 111 ), "JogFwd", "Hit", SubResource( 112 ), "Hit", "JogFwd", SubResource( 113 ), "Idle", "Death", SubResource( 114 ), "StandToRoll", "Death", SubResource( 115 ), "Punch", "Death", SubResource( 116 ), "JogFwd", "Death", SubResource( 117 ), "Hook", "Death", SubResource( 118 ), "Jump", "Death", SubResource( 119 ) ]
 start_node = "Idle"
-graph_offset = Vector2( -881.323, -835 )
+graph_offset = Vector2( -859.323, -580 )
 
 [sub_resource type="AnimationNodeTimeScale" id=82]
 
 [sub_resource type="AnimationNodeBlendTree" id=83]
-graph_offset = Vector2( -483.11, 79.3542 )
+graph_offset = Vector2( -410, 50 )
 nodes/StateMachine/node = SubResource( 81 )
 nodes/StateMachine/position = Vector2( -260, 80 )
 nodes/TS/node = SubResource( 82 )
@@ -3161,7 +3162,7 @@ mesh = SubResource( 14 )
 skin = SubResource( 2 )
 
 [node name="BoneAttachment" type="BoneAttachment" parent="visuals/Soldier/Armature/Skeleton"]
-transform = Transform( 0.223229, -0.354128, -0.908165, 0.205866, 0.927787, -0.311178, 0.95278, -0.117497, 0.280011, 19.5246, 47.5235, -136.61 )
+transform = Transform( 0.476365, -0.692112, -0.542272, 0.639788, 0.695906, -0.326171, 0.603117, -0.191564, 0.774309, 13.7465, 88.7364, -127.838 )
 bone_name = "mixamorig_LeftHand"
 
 [node name="HitArea" type="Area" parent="visuals/Soldier/Armature/Skeleton/BoneAttachment"]

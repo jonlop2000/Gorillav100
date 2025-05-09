@@ -85,25 +85,26 @@ func _physics_process(delta):
 
 func _handle_input_and_send_rpcs(delta):
 	var current = sm.get_current_node()
-	var busy_states = ["StandToRoll", "Hit", "Death"]
-	if is_on_floor() and not busy_states.has(current):
+	var busy_states = ["StandToRoll","Hit","Death"]
+	if not busy_states.has(current):
 		if Input.is_action_just_pressed("jump"):
 			velocity.y = jump_speed
 			sm.travel("Jump")
 			playroom.send_rpc("jump", {})
 			return
-		if Input.is_action_just_pressed("punch"):
+		elif Input.is_action_just_pressed("punch"):
+			print("   • punch pressed!")
 			_do_punch()
 			playroom.send_rpc("punch", {})
 			return
-		if Input.is_action_just_pressed("hook"):
+		elif Input.is_action_just_pressed("hook"):
 			_do_hook()
 			playroom.send_rpc("hook", {})
 			return
-		if Input.is_action_just_pressed("roll"):
-			_roll_dir   = -transform.basis.z
+		elif Input.is_action_just_pressed("roll"):
+			_roll_dir = transform.basis.z
 			_roll_timer = roll_duration
-			velocity    = _roll_dir * roll_speed
+			velocity = _roll_dir * roll_speed
 			sm.travel("StandToRoll")
 			playroom.send_rpc("roll", {})
 			return
@@ -170,6 +171,7 @@ func _do_punch():
 	hit_area.monitoring = true
 	yield(anim_player, "animation_finished")
 	hit_area.monitoring = false
+	_travel("Idle", 1.0)
 	
 func _do_hook():
 	_travel("Hook", 1.6)
