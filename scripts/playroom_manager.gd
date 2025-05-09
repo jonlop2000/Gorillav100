@@ -21,8 +21,10 @@ func _ready():
 		return
 	else:
 		print("PlayroomManager: editor/local mode, spawning single player.")
-		var me = { "id": 1, "isHost": true }
+		is_playroom_ready = true
+		var me = { "id": "local_player", "isHost": true }
 		var pnode = _spawn_player(me)
+		pnode.add_to_group("players") # Ensure the player is in the players group
 		players[str(me.id)] = pnode
 		var bnode = _spawn_boss()
 		bnode.is_host = true
@@ -32,7 +34,6 @@ func on_insert_coin(args):
 	print("Playroom: coin inserted – lobby is up!")
 	register_rpc()
 	Playroom.onPlayerJoin(bridge_to_js("on_player_join"))
-	
 	# spawn *your* player
 	var me = Playroom.me()
 	var pself = _spawn_player(me)
@@ -45,10 +46,14 @@ func on_insert_coin(args):
 
 func on_player_join(args):
 	var state = args[0]
+	if state.id == Playroom.me().id:
+		return
+
 	print("Player joined:", state.id)
 	var pnode = _spawn_player(state)
 	players[str(state.id)] = pnode
-	state.onQuit(bridge_to_js("on_player_quit"))
+	state.onQuit( bridge_to_js("on_player_quit") )
+
 
 func on_player_quit(args):
 	var state = args[0]
@@ -70,6 +75,8 @@ func send_rpc(cmd:String, data:Dictionary = {}) -> void:
 	
 func on_rpc(args):
 	var sender_id = str(args[0])
+	if sender_id == str(Playroom.me().id):
+		return
 	var cmd = str(args[1])
 	var data = args[2]
 	match cmd:
@@ -100,6 +107,7 @@ func _spawn_player(state):
 		p.is_owner = true
 	var players_parent = get_tree().get_root().get_node("prototype/Players")
 	players_parent.add_child(p)
+	p.add_to_group("players") # Always add to players group
 	if p.is_owner:
 		var hud_scene = preload("res://scenes/PlayerHUD.tscn")
 		var hud = hud_scene.instance()

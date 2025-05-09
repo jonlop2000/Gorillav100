@@ -21,7 +21,9 @@ var is_dead = false
 var is_owner := false
 var _last_move_dir := Vector3.ZERO
 var _move_rpc_timer :=  0.0
+var _remote_move_timeout := 0.0  # Track time since last remote movement
 const MOVE_RPC_INTERVAL := 0.1
+const REMOTE_MOVE_TIMEOUT := 0.3  # Time after which to stop remote movement
 
 # ——— cached nodes ———
 onready var camera_mount = $camera_mount
@@ -52,7 +54,13 @@ func _ready():
 	anim_player.connect("animation_finished", self, "_on_animation_finished")
 	hit_area.monitoring = false
 	hit_area.connect("body_entered", self, "_on_hit_area_body_entered")
-	print("ready – owner? ", is_owner)
+	
+	# Make sure player is in the players group
+	if not is_in_group("players"):
+		add_to_group("players")
+	
+	velocity = Vector3.ZERO # Reset velocity on spawn
+	print("Player ready – ID: ", name, " owner? ", is_owner)
 
 
 func _unhandled_input(event):
@@ -80,6 +88,16 @@ func _physics_process(delta):
 	if is_owner or Engine.editor_hint:
 		_handle_input_and_send_rpcs(delta)
 		return
+	
+	# For remote players, gradually slow down if no movement updates received
+	_remote_move_timeout += delta
+	if _remote_move_timeout > REMOTE_MOVE_TIMEOUT:
+		velocity.x = lerp(velocity.x, 0, 0.2)
+		velocity.z = lerp(velocity.z, 0, 0.2)
+		if velocity.length() < 0.1:
+			velocity = Vector3.ZERO
+			_do_idle()
+	
 	velocity = move_and_slide(velocity, Vector3.UP)
 
 
@@ -243,5 +261,11 @@ func remote_roll():
 
 func apply_remote_move(data:Dictionary):
 	var rd = Vector3(data.x, 0, data.z)
-	velocity = transform.basis.xform(rd) * speed
-	_travel("JogFwd", 1.0)
+	# Only apply movement if there's actual input
+	if rd.length_squared() > 0.01:
+		velocity = transform.basis.xform(rd) * speed
+		_travel("JogFwd", 1.0)
+	else:
+		velocity = Vector3.ZERO
+		_do_idle()
+	_remote_move_timeout = 0.0  # Reset timeout when movement received

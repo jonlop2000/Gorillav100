@@ -43,9 +43,14 @@ func _ready():
 	anim_tree.active = true
 	hit_area.monitoring = false
 	hit_area.connect("body_entered", self, "_on_hit_area_body_entered")
+	hit_area.connect("body_exited", self, "_on_hit_area_body_exited")
 	sm.travel("Idle")
 	randomize()
 	
+	# Make sure boss is in the boss group
+	if not is_in_group("boss"):
+		add_to_group("boss")
+
 func _physics_process(delta):
 	if is_host or Engine.editor_hint:
 		_run_local_ai(delta)
@@ -127,9 +132,16 @@ func _find_closest_player():
 	
 	
 func _on_hit_area_body_entered(body):
-	if body.is_in_group("players"):
+	if body.is_in_group("players") and body.has_method("take_damage"):
+		# Prevent multiple hits at once by checking if we're already tracking this player
+		var player_id = body.name
 		body.take_damage(current_attack_damage)
-		hit_area.set_deferred("monitoring", false)
+		print("Boss hit player: ", player_id)
+	
+func _on_hit_area_body_exited(body):
+	# Clean up tracking when player exits hit area
+	if body.is_in_group("players"):
+		print("Boss: player exited hit area: ", body.name)
 	
 	
 func take_damage(amount):
@@ -213,7 +225,7 @@ func _do_melee(target):
 	hit_area.monitoring = true
 	var finished_anim = yield(anim_player, "animation_finished")
 	if finished_anim == "Melee":
-		hit_area.monitoring = false
+		hit_area.set_deferred("monitoring", false)
 	
 	
 func _do_combo(target):
@@ -223,16 +235,24 @@ func _do_combo(target):
 	hit_area.monitoring = true
 	var finished_anim = yield(anim_player, "animation_finished")
 	if finished_anim == "MeleeCombo":
-		hit_area.monitoring = false
+		hit_area.set_deferred("monitoring", false)
 	
 	
 func _do_swing(target):
 	sm.travel("360Swing")
 	playroom.send_rpc("boss_anim", {"state":"360Swing"})
 	yield(get_tree().create_timer(0.5), "timeout")
+	# Get players in range and damage them safely
+	var players_in_area = []
 	for p in get_tree().get_nodes_in_group("players"):
-		if global_transform.origin.distance_to(p.global_transform.origin) <= moves["360Swing"]["range"]:
+		if p.health > 0 and global_transform.origin.distance_to(p.global_transform.origin) <= moves["360Swing"]["range"]:
+			players_in_area.append(p)
+	
+	# Apply damage after collecting all valid players
+	for p in players_in_area:
+		if is_instance_valid(p) and p.has_method("take_damage"):
 			p.take_damage(30)
+			print("360Swing hit player: ", p.name)
 
 func _do_battlecry(target):
 	sm.travel("BattleCry")
@@ -248,6 +268,6 @@ func _do_despair_combo(target):
 	playroom.send_rpc("boss_anim", {"state":"HurricaneKick"})
 	hit_area.monitoring = true
 	yield(anim_player, "animation_finished")
-	hit_area.monitoring = false
-	if target:
+	hit_area.set_deferred("monitoring", false)
+	if target and is_instance_valid(target) and target.has_method("take_damage"):
 		target.take_damage(60)
