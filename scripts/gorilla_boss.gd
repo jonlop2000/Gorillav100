@@ -199,16 +199,29 @@ func _move_toward(dest: Vector3, delta):
 
 	# move & broadcast
 	move_and_slide(dir * move_speed, Vector3.UP)
+	print("Boss moving to: ", global_transform.origin, " rotation: ", rotation.y)
+	
+	# Update room state directly for immediate sync
+	playroom.Playroom.setState("boss", {
+		"pos":[global_transform.origin.x, global_transform.origin.y, global_transform.origin.z],
+		"rot": rotation.y
+	})
+	
+	# Also send RPC for animation state
+	playroom.send_rpc("boss_anim", {"state":"Run"})
+	
+	# Send move RPC for clients that might have missed the state update
 	playroom.send_rpc("boss_move", {
 		"pos": global_transform.origin,
 		"rot": rotation.y
 	})
 	
 # ——— remote RPC handlers ———
-func remote_boss_anim(data):
-	sm.travel(data.state)
+func remote_boss_anim(state_name:String) -> void:
+	sm.travel(state_name)
 
 func remote_boss_move(data):
+	print("Received remote boss move: ", data)
 	global_transform.origin = data.pos
 	rotation.y = data.rot
 

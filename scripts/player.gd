@@ -8,9 +8,11 @@ export (int) var max_health = 100
 export (float) var mouse_sensitivity = 0.002
 export (float) var roll_speed = 15.0
 export (float) var roll_duration = 0.8
+export(bool) var is_server = false
 
 var health = max_health
 var velocity = Vector3.ZERO
+var _pending_dir = Vector3.ZERO
 var _camera_pitch = 0.0
 var pitch_max = deg2rad(80)
 var pitch_min = deg2rad(-80)
@@ -40,12 +42,15 @@ const TS_PATH = "parameters/TS/scale"
 signal health_changed(new_health)
 
 func _ready():
+	print("Player initializing - ID: ", name)
 	# only the owner should own the camera & capture the mouse
 	if is_owner:
+		print("Setting up owner player: ", name)
 		player_camera.current = true
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	else:
 		# remote players never grab focus
+		print("Setting up remote player: ", name)
 		player_camera.current = false
 	spectator_camera.current = false
 	tree.active = true
@@ -72,9 +77,11 @@ func _unhandled_input(event):
 		get_tree().set_input_as_handled()
 	
 func _input(event):
-	if is_dead or Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
+	if is_dead:
 		return
-	if event is InputEventMouseMotion:
+	
+	if is_owner and event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+		print("Processing mouse input for player: ", name)
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		_camera_pitch = clamp(
 			_camera_pitch + event.relative.y * mouse_sensitivity,
@@ -82,95 +89,122 @@ func _input(event):
 		)
 		camera_mount.rotation.x = _camera_pitch
 	
+func apply_remote_move(data:Dictionary) -> void:
+	print("Received remote move for player: ", name, " data: ", data)
+	_pending_dir = Vector3(data["x"], 0, data["z"])
+	# Movement will be processed in _physics_process
+
 func _physics_process(delta):
 	if is_dead:
 		return
-	if is_owner or Engine.editor_hint:
-		_handle_input_and_send_rpcs(delta)
-		return
-	
-	# For remote players, gradually slow down if no movement updates received
-	_remote_move_timeout += delta
-	if _remote_move_timeout > REMOTE_MOVE_TIMEOUT:
-		velocity.x = lerp(velocity.x, 0, 0.2)
-		velocity.z = lerp(velocity.z, 0, 0.2)
-		if velocity.length() < 0.1:
-			velocity = Vector3.ZERO
+
+	# Debug info
+	var is_host = playroom.Playroom.isHost()
+	print("Player physics: ", name, " is_owner: ", is_owner, " is_host: ", is_host)
+
+	# Handle movement for owner player
+	if is_owner:
+		var dir = Vector3(
+			Input.get_action_strength("move_left")  - Input.get_action_strength("move_right"),
+			0,
+			Input.get_action_strength("move_fwd")   - Input.get_action_strength("move_back")
+		)
+		
+		# If we're not the host, send movement to host
+		if not is_host:
+			_send_inputs_to_host(dir)
+			print("Client sending movement to host")
+		else:
+			print("Host processing local movement")
+		
+		# Apply movement locally
+		if dir.length() > 0.01:
+			_do_jogfwd()
+			velocity.x = dir.x * speed
+			velocity.z = dir.z * speed
+		else:
+			velocity.x = lerp(velocity.x, 0, 0.2)
+			velocity.z = lerp(velocity.z, 0, 0.2)
 			_do_idle()
-	
-	velocity = move_and_slide(velocity, Vector3.UP)
-
-
-func _handle_input_and_send_rpcs(delta):
-	var current = sm.get_current_node()
-	var busy_states = ["StandToRoll","Hit","Death"]
-	if not busy_states.has(current):
-		if Input.is_action_just_pressed("jump"):
-			velocity.y = jump_speed
-			sm.travel("Jump")
-			playroom.send_rpc("jump", {})
-			return
-		elif Input.is_action_just_pressed("punch"):
-			print("   • punch pressed!")
-			_do_punch()
-			playroom.send_rpc("punch", {})
-			return
-		elif Input.is_action_just_pressed("hook"):
-			_do_hook()
-			playroom.send_rpc("hook", {})
-			return
-		elif Input.is_action_just_pressed("roll"):
-			_roll_dir = transform.basis.z
-			_roll_timer = roll_duration
-			velocity = _roll_dir * roll_speed
-			sm.travel("StandToRoll")
-			playroom.send_rpc("roll", {})
-			return
-	if _roll_timer > 0.0:
-		_roll_timer -= delta
-		velocity = _roll_dir * roll_speed
-		move_and_slide(velocity, Vector3.UP)
-		if _roll_timer <= 0.0:
-			var dir = Vector3(
-				Input.get_action_strength("move_left")  - Input.get_action_strength("move_right"),
-				0,
-				Input.get_action_strength("move_fwd")   - Input.get_action_strength("move_back")
-			).normalized()
-			if dir != Vector3.ZERO:
-				_do_jogfwd()
-				velocity = transform.basis.xform(dir) * speed
-			else:
-				_do_idle()
-				velocity = Vector3.ZERO
-		return
-	if busy_states.has(current):
-		move_and_slide(velocity, Vector3.UP)
-		return
-	if not is_on_floor():
-		velocity.y += gravity * delta
+		
+		# Apply gravity
+		if not is_on_floor():
+			velocity.y += gravity * delta
+		else:
+			velocity.y = 0
+			
+		velocity = move_and_slide(velocity, Vector3.UP)
+		
+		# If we're host, update state immediately
+		if is_host:
+			var pos = global_transform.origin
+			var state_key = "player." + name
+			var player_state = {
+				"pos": {"x": pos.x, "y": pos.y, "z": pos.z},
+				"rot": rotation.y
+			}
+			playroom.Playroom.setState(state_key, player_state)
+			print("Host updating own state - key:", state_key, " state:", player_state)
 	else:
-		velocity.y = 0
-	var dir = Vector3(
-		Input.get_action_strength("move_left")  - Input.get_action_strength("move_right"),
-		0,
-		Input.get_action_strength("move_fwd")   - Input.get_action_strength("move_back")
-	).normalized()
-	if dir != Vector3.ZERO:
-		_do_jogfwd()
-		velocity = transform.basis.xform(dir) * speed
-	else:
-		velocity.x = lerp(velocity.x, 0, 0.2)
-		velocity.z = lerp(velocity.z, 0, 0.2)
-		_do_idle()
-	
-	_move_rpc_timer += delta
-	if _move_rpc_timer >= MOVE_RPC_INTERVAL or dir != _last_move_dir:
-		_move_rpc_timer = 0
-		_last_move_dir = dir
-		playroom.send_rpc("move", { "x": dir.x, "z": dir.z })
-	
-	velocity = move_and_slide(velocity, Vector3.UP)
-	
+		# Non-owner players are updated via state synchronization
+		if not is_host:
+			# Get state from room state
+			var state_key = "player." + name
+			var player_state = playroom.Playroom.getState(state_key)
+			print("Non-owner checking state - key:", state_key, " state:", player_state)
+			
+			if player_state and player_state.has("pos"):
+				var pos = player_state["pos"]
+				var target_pos = Vector3(pos.x, pos.y, pos.z)
+				global_transform.origin = global_transform.origin.linear_interpolate(target_pos, 0.3)
+				if player_state.has("rot"):
+					rotation.y = player_state["rot"]
+		
+	# Process pending movement from remote RPCs (for host)
+	if is_host and not is_owner and _pending_dir.length() > 0:
+		print("Host processing pending movement for: ", name, " dir: ", _pending_dir)
+		if _pending_dir.length() > 0.01:
+			_do_jogfwd()
+			velocity.x = _pending_dir.x * speed
+			velocity.z = _pending_dir.z * speed
+		else:
+			velocity.x = lerp(velocity.x, 0, 0.2)
+			velocity.z = lerp(velocity.z, 0, 0.2)
+			_do_idle()
+		
+		# Apply gravity
+		if not is_on_floor():
+			velocity.y += gravity * delta
+		else:
+			velocity.y = 0
+			
+		velocity = move_and_slide(velocity, Vector3.UP)
+		
+		# Update state after processing movement
+		var pos = global_transform.origin
+		var state_key = "player." + name
+		var player_state = {
+			"pos": {"x": pos.x, "y": pos.y, "z": pos.z},
+			"rot": rotation.y
+		}
+		playroom.Playroom.setState(state_key, player_state)
+		print("Host updating remote player state - key:", state_key, " state:", player_state)
+		
+		# Reset pending direction
+		_pending_dir = Vector3.ZERO
+
+func _send_inputs_to_host(dir:Vector3):
+	print("Sending inputs to host: ", dir)
+	playroom.send_rpc("move", {"x":dir.x, "z":dir.z})
+	if Input.is_action_just_pressed("jump"):
+		playroom.send_rpc("jump", {})
+	if Input.is_action_just_pressed("punch"):
+		playroom.send_rpc("punch", {})
+	if Input.is_action_just_pressed("hook"):
+		playroom.send_rpc("hook", {})
+	if Input.is_action_just_pressed("roll"):
+		playroom.send_rpc("roll", {})
+
 func _travel(state_name: String, speed: float = 1.0) -> void:
 	tree.set_deferred(TS_PATH, speed)
 	sm.travel(state_name)
@@ -258,14 +292,3 @@ func remote_roll():
 	_roll_timer = roll_duration
 	velocity    = _roll_dir * roll_speed
 	sm.travel("StandToRoll")
-
-func apply_remote_move(data:Dictionary):
-	var rd = Vector3(data.x, 0, data.z)
-	# Only apply movement if there's actual input
-	if rd.length_squared() > 0.01:
-		velocity = transform.basis.xform(rd) * speed
-		_travel("JogFwd", 1.0)
-	else:
-		velocity = Vector3.ZERO
-		_do_idle()
-	_remote_move_timeout = 0.0  # Reset timeout when movement received
