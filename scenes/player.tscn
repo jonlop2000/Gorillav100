@@ -3045,7 +3045,7 @@ bones/10/name = "mixamorig_LeftHand"
 bones/10/parent = 9
 bones/10/rest = Transform( 0.996576, 0.0821864, 0.00906671, -0.082685, 0.990566, 0.109279, 9.63919e-08, -0.109655, 0.99397, -2.28733e-06, 44.3176, -6.19516e-06 )
 bones/10/enabled = true
-bones/10/bound_children = [ NodePath("BoneAttachment") ]
+bones/10/bound_children = [  ]
 bones/11/name = "mixamorig_LeftHandIndex1"
 bones/11/parent = 10
 bones/11/rest = Transform( 0.999294, -0.0368831, 0.00717026, 0.0375736, 0.980929, -0.190697, -1.49012e-08, 0.190832, 0.981623, -1.43051e-06, 16.9645, -3.80725e-06 )
@@ -3162,7 +3162,7 @@ mesh = SubResource( 14 )
 skin = SubResource( 2 )
 
 [node name="BoneAttachment" type="BoneAttachment" parent="visuals/Soldier/Armature/Skeleton"]
-transform = Transform( 0.476365, -0.692112, -0.542272, 0.639788, 0.695906, -0.326171, 0.603117, -0.191564, 0.774309, 13.7465, 88.7364, -127.838 )
+transform = Transform( 0.467282, -0.600384, -0.648989, 0.645494, 0.733288, -0.213606, 0.604141, -0.319106, 0.730196, 18.785, 90.9545, -132.169 )
 bone_name = "mixamorig_LeftHand"
 
 [node name="HitArea" type="Area" parent="visuals/Soldier/Armature/Skeleton/BoneAttachment"]
