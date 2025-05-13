@@ -2962,12 +2962,12 @@ states/StandToRoll/node = SubResource( 100 )
 states/StandToRoll/position = Vector2( -782.323, -919 )
 transitions = [ "Idle", "JogFwd", SubResource( 86 ), "JogFwd", "Idle", SubResource( 87 ), "Punch", "Idle", SubResource( 90 ), "Idle", "Punch", SubResource( 91 ), "Hook", "Idle", SubResource( 92 ), "Idle", "Hook", SubResource( 93 ), "Hook", "JogFwd", SubResource( 94 ), "JogFwd", "Hook", SubResource( 95 ), "Punch", "JogFwd", SubResource( 96 ), "JogFwd", "Punch", SubResource( 97 ), "StandToRoll", "Idle", SubResource( 101 ), "Idle", "StandToRoll", SubResource( 102 ), "Jump", "Idle", SubResource( 103 ), "Idle", "Jump", SubResource( 104 ), "StandToRoll", "JogFwd", SubResource( 106 ), "JogFwd", "StandToRoll", SubResource( 107 ), "Jump", "JogFwd", SubResource( 108 ), "JogFwd", "Jump", SubResource( 109 ), "Hit", "Idle", SubResource( 110 ), "Idle", "Hit", SubResource( 111 ), "JogFwd", "Hit", SubResource( 112 ), "Hit", "JogFwd", SubResource( 113 ), "Idle", "Death", SubResource( 114 ), "StandToRoll", "Death", SubResource( 115 ), "Punch", "Death", SubResource( 116 ), "JogFwd", "Death", SubResource( 117 ), "Hook", "Death", SubResource( 118 ), "Jump", "Death", SubResource( 119 ) ]
 start_node = "Idle"
-graph_offset = Vector2( -859.323, -580 )
+graph_offset = Vector2( -932.323, -821 )
 
 [sub_resource type="AnimationNodeTimeScale" id=82]
 
 [sub_resource type="AnimationNodeBlendTree" id=83]
-graph_offset = Vector2( -410, 50 )
+graph_offset = Vector2( -419, 138 )
 nodes/StateMachine/node = SubResource( 81 )
 nodes/StateMachine/position = Vector2( -260, 80 )
 nodes/TS/node = SubResource( 82 )
@@ -3162,7 +3162,7 @@ mesh = SubResource( 14 )
 skin = SubResource( 2 )
 
 [node name="BoneAttachment" type="BoneAttachment" parent="visuals/Soldier/Armature/Skeleton"]
-transform = Transform( 0.467282, -0.600384, -0.648989, 0.645494, 0.733288, -0.213606, 0.604141, -0.319106, 0.730196, 18.785, 90.9545, -132.169 )
+transform = Transform( 0.411848, -0.735368, -0.53816, 0.72592, 0.621751, -0.294054, 0.550839, -0.269556, 0.789885, 5.91588, 99.9511, -129.575 )
 bone_name = "mixamorig_LeftHand"
 
 [node name="HitArea" type="Area" parent="visuals/Soldier/Armature/Skeleton/BoneAttachment"]

@@ -40,7 +40,7 @@ func _spawn_player(state):
 	var inst : Node = PLAYER_SCENE.instance()
 	inst.name = "player_%s" % state.id
 	_players_root.add_child(inst)
-
+	inst.add_to_group("players")
 	# Colour tint (optional)
 	var col = state.getProfile().color.hexString if state.getProfile() else "#FFFFFF"
 	if inst.has_method("set_player_color"):
@@ -56,8 +56,10 @@ func _spawn_player(state):
 
 
 func _spawn_boss():
-	var scene := preload("res://scenes/gorilla_boss.tscn")
-	var inst  : Node = scene.instance()
+	var scene = preload("res://scenes/gorilla_boss.tscn")
+	var inst  = scene.instance()
+	inst.is_host = Playroom.isHost()   # ← add this line
+	print("Spawning boss - is_host:", inst.is_host)  # Debug log
 	_boss_parent.add_child(inst)
 	return inst
 
@@ -84,7 +86,8 @@ func _pack_boss() -> Dictionary:
 # ---------------------------------------------------------------------#
 func _ready():
 	JavaScript.eval("")   # initialise bridge
-
+	Playroom.RPC.register("punch", _bridge("_on_punch"))
+	Playroom.RPC.register("hook", _bridge("_on_hook"))
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
 		opts.gameId = "I2okszCMAwuMeW4fxFGD"
@@ -98,15 +101,38 @@ func _ready():
 		players["LOCAL"] = { "state": dummy_state, "node": local_node }
 		boss_node = _spawn_boss()
 
+func _on_punch(args):
+	var sender_state = args[1]           # ➊ second slot
+	if sender_state == null:
+		return
+	var sender_id = str(sender_state.id)
+
+	if players.has(sender_id):
+		var node = players[sender_id].node
+		if node and node.has_method("_travel"):
+			node._travel("Punch")
+
+func _on_hook(args):
+	var sender_state = args[1]
+	if sender_state == null:
+		return
+	var sender_id = str(sender_state.id)
+
+	if players.has(sender_id):
+		var node = players[sender_id].node
+		if node and node.has_method("_travel"):
+			node._travel("Hook")
+
+
 # ---------------------------------------------------------------------#
 #  Lobby / join / quit                                                 #
 # ---------------------------------------------------------------------#
 func _on_insert_coin(_args):
 	Playroom.onPlayerJoin(_bridge("_on_player_join"))
-
 	if Playroom.isHost():
 		# Host also gets a callback for itself; wait till that fires to have players dict filled
 		boss_node = _spawn_boss()
+		Playroom.setState("boss", JSON.print(_pack_boss()))
 		_push_room_init_snapshot()
 
 func _on_player_join(args):
@@ -222,6 +248,19 @@ func _physics_process(delta):
 			else:
 				node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
 			node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
+			
+		# ───────────────────────────────────────────────────
+		# CLIENTS: poll boss state at BOSS_SEND_RATE and apply
+		# ───────────────────────────────────────────────────
+		_accum_boss += delta
+		if _accum_boss >= BOSS_SEND_RATE:
+			_accum_boss = 0.0
+			var raw = Playroom.getState("boss")
+			if raw:
+				var dict = JSON.parse(raw).result
+				if not boss_node:
+					boss_node = _spawn_boss()
+				_apply_boss_state(dict)
 
 # ---------------------------------------------------------------------#
 #  Boss update helpers                                                 #
@@ -232,8 +271,9 @@ func _apply_boss_state(dict:Dictionary):
 	boss_node.rotation.y              = dict["rot"]
 	boss_node.set("health", dict["hp"])
 
-func _on_boss_state(args):
-	_apply_boss_state(args[0])
+func _on_boss_state(raw_json):
+	var dict = JSON.parse(raw_json).result
+	_apply_boss_state(dict)
 
 func _on_boss_health(args):
 	if boss_node:
@@ -242,9 +282,9 @@ func _on_boss_health(args):
 # ---------------------------------------------------------------------#
 #  Event subscriptions (clients)                                       #
 # ---------------------------------------------------------------------#
-func _register_boss_listeners():
-	if Playroom.isHost(): return      # host does its own thing
-	Playroom.onState("boss", _bridge("_on_boss_state"))
+#func _register_boss_listeners():
+#	if Playroom.isHost(): return      # host does its own thing
+#	Playroom.onState("boss", _bridge("_on_boss_state"))
 
 # ---------------------------------------------------------------------#
 #  Clean‑up                                                            #
