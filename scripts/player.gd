@@ -12,6 +12,7 @@ export var gravity : float = -24.0
 export var mouse_sensitivity : float = 0.002
 export var roll_speed : float = 15.0
 export var roll_time : float = 0.8
+export(int) var max_health := 100
 onready var _tree : AnimationTree = $visuals/Soldier/AnimationTree
 onready var _sm : AnimationNodeStateMachinePlayback = _tree.get("parameters/StateMachine/playback")
 
@@ -19,6 +20,7 @@ var _prev_pos : Vector3 = Vector3.ZERO
 var _current_anim : String = ""
 var _smoothed_speed : float = 0.0      # shared by both local & remote
 var _current_state : String = ""
+var health := max_health
 # ────────────────────────────────────────────────────────────────────
 #  Public flags set by PlayroomManager
 # ────────────────────────────────────────────────────────────────────
@@ -40,6 +42,7 @@ onready var _camera_mount : Spatial = $camera_mount
 onready var _camera : Camera = $camera_mount/Camera
 onready var _anim : AnimationPlayer = $visuals/Soldier/AnimationPlayer
 
+signal health_changed(hp)
 
 func _ready():
 	_tree.active = true        

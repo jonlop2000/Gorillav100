@@ -10,6 +10,7 @@ const BOSS_SEND_RATE    = 0.10      # 10 Hz
 
 # Packed scene for avatars
 const PLAYER_SCENE : PackedScene = preload("res://scenes/player.tscn")
+const PLAYER_HUD_SCENE : PackedScene = preload("res://scenes/PlayerHUD.tscn")
 
 # ---------------------------------------------------------------------#
 #  State                                                               #
@@ -41,18 +42,27 @@ func _spawn_player(state):
 	inst.name = "player_%s" % state.id
 	_players_root.add_child(inst)
 	inst.add_to_group("players")
+
 	# Colour tint (optional)
 	var col = state.getProfile().color.hexString if state.getProfile() else "#FFFFFF"
 	if inst.has_method("set_player_color"):
 		inst.set_player_color(ColorN(col))
 
-	# Tell the avatar whether **this** client owns it
+	# tell it who's local vs. remote
 	if str(state.id) == str(Playroom.me().id):
-		inst.make_local()          # <- you control this one
+		inst.make_local()
+		# ────────────── HUD for the local player ──────────────
+		var hud = PLAYER_HUD_SCENE.instance()
+		# this assumes your HUD script has an `export(NodePath) var player_path`
+		hud.player_path = inst.get_path()
+		var ui_parent = get_tree().get_root().get_node("prototype/UI")
+		ui_parent.add_child(hud)
 	else:
-		inst.make_remote()         # <- visual‑only
+		inst.make_remote()
+
 	print("%s spawned – local=%s" % [inst.name, inst.is_local])
 	return inst
+
 
 
 func _spawn_boss():
