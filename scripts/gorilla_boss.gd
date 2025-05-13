@@ -12,13 +12,15 @@ export(float) var attack_range    := 3.0
 export(float) var rotation_speed  := 5.0
 
 ## ───────────────  Runtime  ─────────────── ##
-var health              : int     = max_health
-var state               : int     = State.IDLE
-var state_timer         : float   = 0.0
-var target                        = null
-var is_host             : bool    = false      # set by PlayroomManager
+var health : int  = max_health
+var state : int  = State.IDLE
+var state_timer : float = 0.0
+var target = null
+var is_host : bool = false      # set by PlayroomManager
 var current_attack_dmg  : int     = 0
 var _nav_map : RID
+var _target_pos   : Vector3
+var _target_rot_y : float
 
 
 ##  AnimationTree shortcuts
@@ -41,6 +43,8 @@ func _ready():
 	hp_bar.max_value = max_health
 	hp_bar.value = health
 	anim_tree.active = true
+	_target_pos = global_transform.origin
+	_target_rot_y = rotation.y
 
 	_nav_map = get_world().get_navigation_map()
 	if _nav_map == RID():
@@ -49,8 +53,6 @@ func _ready():
 		print("✅ Navigation map RID is", _nav_map)
 
 	hit_area.monitoring = false
-	if not is_host:
-		set_physics_process(false)
 	if not is_in_group("boss"):
 		add_to_group("boss")
 
@@ -68,10 +70,9 @@ func get_snapshot() -> Dictionary:
 
 func apply_remote_state(d : Dictionary) -> void:
 	# Called by manager on non‑host clients
-	print("📡 [Client] apply_remote_state:", d)
 	var p = d["pos"]
-	global_transform.origin = Vector3(p[0], p[1], p[2])
-	rotation.y              = d["rot"]
+	_target_pos   = Vector3(p[0], p[1], p[2])
+	_target_rot_y = d["rot"]
 	if health != d["hp"]:
 		health   = d["hp"]
 		hp_bar.value = health
@@ -84,11 +85,18 @@ func _ensure_anim(name : String) -> void:
 
 ## ───────────────  Host‑only physics / AI  ─────────────── ##
 func _physics_process(delta):
-	print("🛑 is_host =", is_host)
-	if not is_host:
-		return                            # clients do nothing
-	_state_machine(delta)
-	_update_hp_bar()
+	if is_host:
+		_state_machine(delta)
+		_update_hp_bar()
+	else:
+		# remote smoothing
+		var cur = global_transform.origin
+		cur = cur.linear_interpolate(_target_pos, delta * 8.0)
+		global_transform.origin = cur
+		rotation.y = lerp_angle(rotation.y, _target_rot_y, delta * 8.0)
+		# still update the health bar if you like
+		_update_hp_bar()
+
 
 	# Manager polls `get_snapshot()` at 10 Hz – nothing else to do here.
 
