@@ -21,6 +21,7 @@ var current_attack_dmg  : int     = 0
 var _nav_map : RID
 var _target_pos   : Vector3
 var _target_rot_y : float
+var _last_used = {}
 
 
 ##  AnimationTree shortcuts
@@ -37,15 +38,25 @@ onready var hp_bar = $HealthViewport/UIRoot/Healthbar
 signal anim_changed(anim_name)
 signal health_changed(hp)
 
+var moves = {
+	"Melee": {"range":3.0, "cooldown":1.0,  "weight":3,   "func":"_do_melee"},
+	"MeleeCombo": {"range":3.0, "cooldown":2.0,  "weight":2,   "func":"_do_combo"},
+	"360Swing": {"range":6.0, "cooldown":3.0,  "weight":1,   "func":"_do_swing"},
+	"BattleCry": {"range":8.0, "cooldown":2.0, "weight":0.5, "func":"_do_battlecry"},
+	"HurricaneKick": {"range":4.0,"cooldown":4.0,  "weight":1,   "func":"_do_despair_combo", "desperation_only":true}
+}
+
 ## ───────────────  Setup  ─────────────── ##
 func _ready():
+	randomize()
 	hp_bar.min_value = 0
 	hp_bar.max_value = max_health
 	hp_bar.value = health
 	anim_tree.active = true
 	_target_pos = global_transform.origin
 	_target_rot_y = rotation.y
-
+	for name in moves.keys():
+		_last_used[name] = -INF
 	_nav_map = get_world().get_navigation_map()
 	if _nav_map == RID():
 		push_error("⚠️ Failed to grab navigation map RID!")
@@ -106,72 +117,60 @@ func _physics_process(delta):
 func _state_machine(delta):
 	state_timer = max(state_timer - delta, 0)
 	target = _pick_target()
-	var dist = INF
-	if target:
-		dist = global_transform.origin.distance_to(target.global_transform.origin)
+	if not target:
+		_enter_state(State.IDLE)
+		return
 
-	# 1) Desperation entry
-	if health < max_health * 0.3 and state != State.DESPERATION:
-		_enter_state(State.DESPERATION)
-	else:
-		match state:
-			State.IDLE:
-				if target:
-					_enter_state(State.CHASE)
+	var dist = global_transform.origin.distance_to(target.global_transform.origin)
+	var in_range = dist <= attack_range
 
-			State.CHASE:
-				if not target:
-					_enter_state(State.IDLE)
-				elif dist <= attack_range:
-					_enter_state(State.ATTACK)
-
-			State.ATTACK:
-				if state_timer == 0 and target:
-					_enter_state(State.RECOVER)
-					_choose_attack(state == State.DESPERATION)
-
-			State.RECOVER:
-				if state_timer == 0 and target:
-					if dist <= attack_range:
-						_enter_state(State.ATTACK)
-						_choose_attack()
-					else:
-						_enter_state(State.CHASE)
-
-			State.DESPERATION:
-				if not target:
-					_enter_state(State.IDLE)
-				elif dist <= attack_range:
-					_enter_state(State.ATTACK)
-				else:
-					_enter_state(State.CHASE)
-
-	# 2) Movement: only when chasing or in desperation
-	if state in [ State.CHASE, State.DESPERATION ] and target:
-		_move_toward(target.global_transform.origin, delta)
-
-
-
-func _enter_state(new_state : int):
-	state  = new_state
-	state_timer = 0.0
-	
 	match state:
 		State.IDLE:
-			sm.travel("Idle")
-			emit_signal("anim_changed", "Idle")
+			if in_range:
+				_enter_state(State.ATTACK)
+				_choose_attack(state == State.DESPERATION)
+			else:
+				_enter_state(State.CHASE)
 
-		State.CHASE, State.DESPERATION:
-			sm.travel("Run")               # ← your chase clip
-			emit_signal("anim_changed", "Run")
+		State.CHASE:
+			if in_range:
+				_enter_state(State.ATTACK)
+				_choose_attack(state == State.DESPERATION)
 
 		State.ATTACK:
-			# Attack moves call travel themselves
+			# if we’ve moved out of range mid-cooldown, go chase:
+			if not in_range:
+				_enter_state(State.CHASE)
+			# otherwise, once the cooldown timer hits zero, fire off another attack:
+			elif state_timer == 0:
+				_choose_attack(state == State.DESPERATION)
+
+		State.DESPERATION:
+			# optional: you could treat this as ATTACK mode with different params
+			if not in_range:
+				_enter_state(State.CHASE)
+			elif state_timer == 0:
+				_choose_attack(true)
+
+	# 2) Movement: only when chasing or in desperation
+	if state == State.CHASE and target:
+		_move_toward(target.global_transform.origin, delta)
+
+func _enter_state(new_state : int):
+	state = new_state
+	state_timer = 0.0
+
+	match state:
+		State.IDLE:
+			sm.travel("Idle"); emit_signal("anim_changed", "Idle")
+
+		State.CHASE, State.DESPERATION:
+			sm.travel("Run"); emit_signal("anim_changed", "Run")
+
+		State.ATTACK:
+			# no-op—moves themselves call sm.travel()
 			pass
 
-		State.RECOVER:
-			sm.travel("Idle")
-			emit_signal("anim_changed", "Idle")
 
 func _pick_target():
 	var players = get_tree().get_nodes_in_group("players")
@@ -198,23 +197,44 @@ func _pick_target():
 		print("No valid target found")
 	return best
 
-func _think_attack_or_chase(delta, desperation := false) -> void:
-	if not target:
-		return
-	var dist          = global_transform.origin.distance_to(target.global_transform.origin)
-	var attack_inner  = attack_range - 0.3   # how far inside before attacking
-	var attack_outer  = attack_range         # how far outside before chasing
-	if dist > attack_outer:
-		_enter_state(State.CHASE)
-	elif dist < attack_inner:
-		_enter_state(State.ATTACK)
-		_choose_attack(desperation)
-
 func _choose_attack(desperation := false) -> void:
-	if desperation:
-		_do_hurricane_kick()
-	else:
+	var dist = global_transform.origin.distance_to(target.global_transform.origin)
+	
+	var candidates = []
+	for name in moves.keys():
+		var m = moves[name]
+		# skip desperation-only if we're not desperate
+		if m.has("desperation_only") and not desperation:
+			continue
+		# skip if out of range
+		if dist > m.range:
+			continue
+		# skip if still on cooldown
+		if OS.get_ticks_msec()/1000.0 - _last_used[name] < m.cooldown:
+			continue
+		candidates.append(name)
+	
+	if candidates.empty():
+		# fallback to basic melee
 		_do_melee()
+		state_timer = moves["Melee"].cooldown
+		_last_used["Melee"] = OS.get_ticks_msec()/1000.0
+		return
+
+	# 2) weighted random selection
+	var total_weight = 0.0
+	for name in candidates:
+		total_weight += moves[name].weight
+
+	var choice = randf() * total_weight
+	for name in candidates:
+		choice -= moves[name].weight
+		if choice <= 0.0:
+			# 3) invoke the move
+			call(moves[name].func)
+			state_timer = moves[name].cooldown
+			_last_used[name] = OS.get_ticks_msec()/1000.0
+			return
 
 ## ───────────────  Moves (host only)  ─────────────── ##
 func _do_melee():
@@ -234,6 +254,54 @@ func _do_hurricane_kick():
 	yield(anim_player, "animation_finished")
 	hit_area.monitoring = false
 	_enter_state(State.RECOVER); state_timer = 2.0
+	
+func _do_combo() -> void:
+	current_attack_dmg = 25
+	sm.travel("MeleeCombo")
+	emit_signal("anim_changed", "MeleeCombo")
+	hit_area.monitoring = true
+	yield(anim_player, "animation_finished")
+	hit_area.monitoring = false
+	_enter_state(State.RECOVER)
+	state_timer = moves["MeleeCombo"].cooldown
+	
+func _do_swing() -> void:
+	current_attack_dmg = 15
+	sm.travel("360Swing")
+	emit_signal("anim_changed", "360Swing")
+
+	hit_area.monitoring = true
+	yield(anim_player, "animation_finished")
+	hit_area.monitoring = false
+
+	_enter_state(State.RECOVER)
+	state_timer = moves["360Swing"].cooldown
+
+
+# called when moves["BattleCry"].func == "_do_battlecry"
+func _do_battlecry() -> void:
+	# BattleCry might not deal damage, but could buff or intimidate
+	sm.travel("BattleCry")
+	emit_signal("anim_changed", "BattleCry")
+
+	yield(anim_player, "animation_finished")
+
+	_enter_state(State.RECOVER)
+	state_timer = moves["BattleCry"].cooldown
+
+
+# called when moves["HurricaneKick"].func == "_do_despair_combo"
+func _do_despair_combo() -> void:
+	current_attack_dmg = 40
+	sm.travel("HurricaneKick")      # reuse your HurricaneKick anim
+	emit_signal("anim_changed", "HurricaneKick")
+
+	hit_area.monitoring = true
+	yield(anim_player, "animation_finished")
+	hit_area.monitoring = false
+
+	_enter_state(State.RECOVER)
+	state_timer = moves["HurricaneKick"].cooldown
 
 ## ───────────────  Movement helpers (host) ─────────────── ##
 func _move_toward(dest: Vector3, delta: float) -> void:
