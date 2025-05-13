@@ -78,6 +78,7 @@ func _pack_boss() -> Dictionary:
 		"py": boss_node.global_transform.origin.y,
 		"pz": boss_node.global_transform.origin.z,
 		"rot": boss_node.rotation.y,
+		"anim": boss_node.get_current_anim(),
 		"hp" : boss_node.get("health") if boss_node else 0
 	}
 
@@ -223,13 +224,6 @@ func _physics_process(delta):
 	#  CLIENTS: read host transforms                                #
 	# --------------------------------------------------------------#
 	else:
-		# boss via onState event; but if we missed it poll once
-		if not boss_node:
-			var raw = Playroom.getState("boss")
-			if raw:
-				boss_node = _spawn_boss()
-				_apply_boss_state(JSON.parse(raw).result)
-
 		# players (simple lerp)
 		for id in players.keys():
 			var entry = players[id]
@@ -260,7 +254,12 @@ func _physics_process(delta):
 				var dict = JSON.parse(raw).result
 				if not boss_node:
 					boss_node = _spawn_boss()
-				_apply_boss_state(dict)
+				boss_node.apply_remote_state({
+					"pos":  [dict["px"], dict["py"], dict["pz"]],
+					"rot":  dict["rot"],
+					"hp":   dict["hp"],
+					"anim": dict["anim"]
+				})
 
 # ---------------------------------------------------------------------#
 #  Boss update helpers                                                 #

@@ -110,9 +110,9 @@ func _physics_process(delta):
 func _local_movement(delta):
 	# WASD → world‑space direction
 	var dir = Vector3(
-		Input.get_action_strength("move_left")  - Input.get_action_strength("move_right"),
+		Input.get_action_strength("move_right")  - Input.get_action_strength("move_left"),
 		0,
-		Input.get_action_strength("move_fwd")   - Input.get_action_strength("move_back")
+		Input.get_action_strength("move_back")   - Input.get_action_strength("move_fwd")
 	).normalized()
 	dir = -global_transform.basis.z * dir.z + -global_transform.basis.x * dir.x
 	print("dir:", dir, "state:", _current_state)
