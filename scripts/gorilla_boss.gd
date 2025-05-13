@@ -98,35 +98,51 @@ func _physics_process(delta):
 func _state_machine(delta):
 	state_timer = max(state_timer - delta, 0)
 	target = _pick_target()
-	
-	if not target:
-		if state != State.IDLE:
-			print("No target found, returning to IDLE")
-			_enter_state(State.IDLE)
-		return
-		
-	var dist = global_transform.origin.distance_to(target.global_transform.origin)
-	print("Current state:", state, " Distance to target:", dist)
-	
-	match state:
-		State.IDLE:
-			if target:
-				print("Target found, entering CHASE state")
-				_enter_state(State.CHASE)
-		State.CHASE:
-			_think_attack_or_chase(delta)
-		State.ATTACK:
-			pass        # attack coroutines drive transitions
-		State.RECOVER:
-			if state_timer == 0 and target:
-				print("Recovery finished, returning to CHASE")
-				_enter_state(State.CHASE)
-		State.DESPERATION:
-			_think_attack_or_chase(delta, true)
+	var dist = INF
+	if target:
+		dist = global_transform.origin.distance_to(target.global_transform.origin)
 
-	if state in [State.CHASE, State.DESPERATION]:
-		print("Moving toward target in state:", state)
+	# 1) Desperation entry
+	if health < max_health * 0.3 and state != State.DESPERATION:
+		_enter_state(State.DESPERATION)
+	else:
+		match state:
+			State.IDLE:
+				if target:
+					_enter_state(State.CHASE)
+
+			State.CHASE:
+				if not target:
+					_enter_state(State.IDLE)
+				elif dist <= attack_range:
+					_enter_state(State.ATTACK)
+
+			State.ATTACK:
+				if state_timer == 0 and target:
+					_enter_state(State.RECOVER)
+					_choose_attack(state == State.DESPERATION)
+
+			State.RECOVER:
+				if state_timer == 0 and target:
+					if dist <= attack_range:
+						_enter_state(State.ATTACK)
+						_choose_attack()
+					else:
+						_enter_state(State.CHASE)
+
+			State.DESPERATION:
+				if not target:
+					_enter_state(State.IDLE)
+				elif dist <= attack_range:
+					_enter_state(State.ATTACK)
+				else:
+					_enter_state(State.CHASE)
+
+	# 2) Movement: only when chasing or in desperation
+	if state in [ State.CHASE, State.DESPERATION ] and target:
 		_move_toward(target.global_transform.origin, delta)
+
+
 
 func _enter_state(new_state : int):
 	state  = new_state
@@ -177,18 +193,16 @@ func _pick_target():
 func _think_attack_or_chase(delta, desperation := false) -> void:
 	if not target:
 		return
-	var dist   = global_transform.origin.distance_to(target.global_transform.origin)
-	var buffer = attack_range - 0.3   # you can expose this as an export if you like
-	if dist > attack_range:
+	var dist          = global_transform.origin.distance_to(target.global_transform.origin)
+	var attack_inner  = attack_range - 0.3   # how far inside before attacking
+	var attack_outer  = attack_range         # how far outside before chasing
+	if dist > attack_outer:
 		_enter_state(State.CHASE)
-	elif dist < buffer:
+	elif dist < attack_inner:
 		_enter_state(State.ATTACK)
-		_choose_attack(desperation)    # still respect that flag
-	else:
-		_enter_state(State.CHASE)
+		_choose_attack(desperation)
 
-func _choose_attack(desperation):
-	# very condensed example – keep your original move table if you like
+func _choose_attack(desperation := false) -> void:
 	if desperation:
 		_do_hurricane_kick()
 	else:
@@ -217,34 +231,24 @@ func _do_hurricane_kick():
 func _move_toward(dest: Vector3, delta: float) -> void:
 	if not is_host:
 		return
-
-	# clamp start/end
-	var start_pt = NavigationServer.map_get_closest_point(_nav_map, global_transform.origin)
-	var end_pt   = NavigationServer.map_get_closest_point(_nav_map, dest)
-
-	# get a smoothed path
-	var path = NavigationServer.map_get_path(_nav_map, start_pt, end_pt, true)
-	print("PATH:", path, " size=", path.size())
-
-	# fallback if degenerate
-	if path.size() < 2 or path[1].distance_to(global_transform.origin) < 0.01:
-		_direct_steer(dest, delta)
+	nav_agent.set_target_location(dest)
+	# if we’ve no path or already there, bail
+	if nav_agent.is_navigation_finished():
 		return
 
-	# steer to next point
-	var next_pt = path[1]
-	var dir     = (next_pt - global_transform.origin).normalized()
+	var next_pt = nav_agent.get_next_location()
+	var dir     = next_pt - global_transform.origin
 	dir.y = 0
 	if dir.length() < 0.01:
 		return
 	dir = dir.normalized()
 
-	# rotate smoothly toward the final destination
+	# rotate smoothly toward dest
 	var look = dest - global_transform.origin
 	look.y = 0
 	if look.length() > 0:
-		var target_rot = atan2(look.x, look.z)
-		rotation.y = lerp_angle(rotation.y, target_rot, rotation_speed * delta)
+		var t_rot = atan2(look.x, look.z)
+		rotation.y = lerp_angle(rotation.y, t_rot, rotation_speed * delta)
 
 	move_and_slide(dir * move_speed, Vector3.UP)
 
