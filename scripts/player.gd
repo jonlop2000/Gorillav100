@@ -33,6 +33,8 @@ var profile_color : Color = Color.white
 var _velocity        : Vector3  = Vector3.ZERO
 var _roll_timer      : float    = 0.0
 var _roll_dir   := Vector3.ZERO
+var _remote_roll_timer := 0.0
+var _remote_roll_dir   := Vector3.ZERO
 var _camera_pitch    : float    = 0.0
 const _pitch_min     : float    = deg2rad(-80)
 const _pitch_max     : float    = deg2rad( 60)
@@ -98,7 +100,10 @@ func _physics_process(delta):
 	if is_local:
 		_local_movement(delta)
 	else:
-		_calc_remote_velocity(delta)   # derive velocity for animation
+		if _remote_roll_timer > 0.0:
+			_simulate_remote_roll(delta)      # simulate first, then skip lerp
+		else:
+			_calc_remote_velocity(delta)      # normal snapshot interp
 	_update_animation(delta)
 	if is_local and not Playroom.isHost():
 		var my_state = Playroom.me()          # ← 1️⃣ grab *your* player object
@@ -142,11 +147,14 @@ func _local_movement(delta):
 		_roll_dir = global_transform.basis.z       # forward
 		_roll_timer = roll_time
 		_travel("StandToRoll")
-		Playroom.RPC.call("roll", {
-			"dir": _roll_dir,              
-			"t": OS.get_ticks_msec()     
-		}, Playroom.RPC.Mode.OTHERS)
-
+		var payload = {
+				"dir": [_roll_dir.x, _roll_dir.y, _roll_dir.z],
+				"t":   OS.get_ticks_msec()
+			}
+			# stringify it
+		var raw = JSON.print(payload)
+			# send that string
+		Playroom.RPC.call("roll", raw, Playroom.RPC.Mode.OTHERS)
 		return
 	if Input.is_action_just_pressed("punch"):
 		_do_punch()        
@@ -187,10 +195,10 @@ func _local_movement(delta):
 #  Remote avatar helper – estimate velocity for animations
 # ────────────────────────────────────────────────────────────────────
 func _calc_remote_velocity(delta):
-	var new_pos   = global_transform.origin
-	var frame_v   = (new_pos - _prev_pos) / max(delta, 0.0001)
-	_prev_pos     = new_pos
-	_velocity   = frame_v
+	var new_pos = global_transform.origin
+	var frame_v = (new_pos - _prev_pos) / max(delta, 0.0001)
+	_prev_pos = new_pos
+	_velocity = frame_v
 
 	var raw_speed = Vector3(frame_v.x, 0, frame_v.z).length()
 	_smoothed_speed = lerp(_smoothed_speed, raw_speed, delta * 10.0)
@@ -201,7 +209,7 @@ func _calc_remote_velocity(delta):
 func _handle_roll(delta):
 	_roll_timer -= delta
 	# just move you forward while rolling
-	var fwd = -global_transform.basis.z
+	var fwd = global_transform.basis.z
 	_velocity = fwd * roll_speed
 	_velocity.y += gravity * delta
 	_velocity = move_and_slide(_velocity, Vector3.UP)
@@ -225,17 +233,37 @@ func _do_hook():
 	Playroom.RPC.call("hook", {}, Playroom.RPC.Mode.OTHERS)
 	
 # called only by the manager when someone else rolls
-func _start_remote_roll() -> void:
+func _start_remote_roll(data: Dictionary) -> void:
+	var a = data["dir"]
+	_remote_roll_dir = Vector3(a[0], a[1], a[2])
+	var sent_ms = float(data["t"])
+	var elapsed = clamp((OS.get_ticks_msec() - sent_ms) / 1000.0, 0.0, roll_time)
+	_remote_roll_timer = roll_time - elapsed
+	# ★ Catch‑up offset so we start where the host already is
+	global_transform.origin += _remote_roll_dir.normalized() * roll_speed * elapsed
+	_prev_pos = global_transform.origin          # keep interpolation baseline
 	_travel("StandToRoll")
-	_roll_timer = roll_time     # so _update_animation() keeps it in Idle afterwards
 
+func _simulate_remote_roll(delta):
+	if _remote_roll_timer <= 0.0:
+		return
+	_remote_roll_timer -= delta
+	var vel = _remote_roll_dir * roll_speed
+	vel.y  += gravity * delta
+	_velocity = move_and_slide(vel, Vector3.UP)
+	_prev_pos = global_transform.origin
+
+func is_remotely_rolling() -> bool:
+	return _remote_roll_timer > 0.0
 
 func _update_animation(delta):
 	# --- keep cache in sync ---
 	var tree_state = _sm.get_current_node()
 	if tree_state != _current_state:
 		_current_state = tree_state
-	
+	if _roll_timer > 0.0 or _remote_roll_timer > 0.0:
+		_travel("StandToRoll")
+		return
 	if BUSY_STATES.has(_current_state):
 		return
 	var speed = _smoothed_speed

@@ -135,17 +135,31 @@ func _on_hook(args):
 		if node and node.has_method("_travel"):
 			node._travel("Hook")
 			
+
 func _on_roll(args):
-	var sender_state = args[1]           
+	# 1) Extract the raw JSON string
+	var raw = args[0]
+	if typeof(raw) != TYPE_STRING:
+		push_error("Expected roll RPC payload as String, got %s" % typeof(raw))
+		return
+	# 2) Parse it back into a Dictionary
+	var parsed = JSON.parse(raw)
+	if parsed.error != OK:
+		push_error("Failed to parse roll JSON: %s" % parsed.error_string)
+		return
+	var data = parsed.result
+	# 3) Grab the sender_state safely
+	var sender_state = null
+	if args.size() > 1:
+		sender_state = args[1]
 	if sender_state == null:
 		return
+	# 4) Find the player node and invoke the roll
 	var id = str(sender_state.id)
 	if players.has(id):
 		var node = players[id].node
 		if node and node.has_method("_start_remote_roll"):
-			node._start_remote_roll()
-
-
+			node._start_remote_roll(data)
 
 # ---------------------------------------------------------------------#
 #  Lobby / join / quit                                                 #
@@ -249,9 +263,12 @@ func _physics_process(delta):
 		# players (simple lerp)
 		for id in players.keys():
 			var entry = players[id]
-			var s     = entry.state
+			var s  = entry.state
 			var node  = entry.node
-			if not node: continue
+			if not node: 
+				continue
+			if node.has_method("is_remotely_rolling") and node.is_remotely_rolling():
+				continue
 
 			var x = s.getState("px") if s.getState("px") else node.global_transform.origin.x
 			var y = s.getState("py") if s.getState("py") else node.global_transform.origin.y
