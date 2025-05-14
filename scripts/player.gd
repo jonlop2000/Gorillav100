@@ -30,8 +30,8 @@ var profile_color : Color = Color.white
 # ────────────────────────────────────────────────────────────────────
 #  Internal state
 # ────────────────────────────────────────────────────────────────────
-var _velocity        : Vector3  = Vector3.ZERO
-var _roll_timer      : float    = 0.0
+var _velocity : Vector3  = Vector3.ZERO
+var _roll_timer  : float    = 0.0
 var _roll_dir   := Vector3.ZERO
 var _roll_elapsed_bias  = 0.0
 var _remote_roll_timer := 0.0
@@ -238,25 +238,20 @@ func _do_hook():
 func _start_remote_roll(data: Dictionary) -> void:
 	if not data.has("dir") or not data.has("t"):
 		return
-
 	# extract direction and elapsed time
 	var dir_array = data["dir"]             # [x,y,z]
 	_remote_roll_dir = Vector3(dir_array[0], dir_array[1], dir_array[2]).normalized()
-
 	var sent_ms = float(data["t"])
 	var elapsed = clamp((OS.get_ticks_msec() - sent_ms) / 1000.0, 0.0, roll_time)
-
 	# 1) always predict the full duration
 	_remote_roll_timer = roll_time
-
 	# 2) store how much of the roll we should skip past
 	_roll_elapsed_bias = elapsed
-
 	# 3) advance the position immediately to match host up to 'elapsed'
 	#    so that when we start simulating, we're in the right spot.
-	var bias_distance = roll_speed * elapsed
-	global_transform.origin += _remote_roll_dir * bias_distance
-	_prev_pos = global_transform.origin
+#	var bias_distance = roll_speed * elapsed
+#	global_transform.origin += _remote_roll_dir * bias_distance
+#	_prev_pos = global_transform.origin
 
 	# 4) switch animation/state into rolling
 	_travel("StandToRoll")   # or whatever your state machine uses
@@ -265,27 +260,22 @@ func _start_remote_roll(data: Dictionary) -> void:
 func _simulate_remote_roll(delta: float) -> void:
 	if _remote_roll_timer <= 0.0:
 		return
-
 	# decrement timer
 	_remote_roll_timer -= delta
 
 	# compute how far we'd move this frame
 	var frame_distance = roll_speed * delta
-
 	# if we still have bias to consume, subtract it from this frame
 	if _roll_elapsed_bias > 0.0:
 		var bias_consumed = min(_roll_elapsed_bias, frame_distance)
 		_roll_elapsed_bias -= bias_consumed
 		frame_distance -= bias_consumed
 	# after bias is gone, frame_distance is the "new" movement
-
 	# move directly without physics collisions
 	global_translate(_remote_roll_dir * frame_distance)
-
 	# optional: you can still apply simple gravity if you need vertical arc
 	# velocity.y += gravity * delta
 	# global_translate(Vector3(0, velocity.y * delta, 0))
-
 	_prev_pos = global_transform.origin
 
 func is_remotely_rolling() -> bool:
