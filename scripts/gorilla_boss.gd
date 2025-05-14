@@ -6,10 +6,10 @@ extends KinematicBody
 ## ───────────────  Tunables  ─────────────── ##
 enum State { IDLE, CHASE, ATTACK, RECOVER, DESPERATION }
 
-export(int)   var max_health      := 2000
-export(float) var move_speed      := 5.0
-export(float) var attack_range    := 3.0
-export(float) var rotation_speed  := 5.0
+export(int)   var max_health := 2000
+export(float) var move_speed := 5.0
+export(float) var attack_range := 3.0
+export(float) var rotation_speed := 5.0
 
 ## ───────────────  Runtime  ─────────────── ##
 var health : int  = max_health
@@ -17,7 +17,7 @@ var state : int  = State.IDLE
 var state_timer : float = 0.0
 var target = null
 var is_host : bool = false      # set by PlayroomManager
-var current_attack_dmg  : int     = 0
+var current_attack_dmg  : int = 0
 var _nav_map : RID
 var _target_pos   : Vector3
 var _target_rot_y : float
@@ -39,8 +39,8 @@ signal anim_changed(anim_name)
 signal health_changed(hp)
 
 var moves = {
-	"Melee": {"range":3.0, "cooldown":1.0,  "weight":3,   "func":"_do_melee"},
-	"MeleeCombo": {"range":3.0, "cooldown":2.0,  "weight":2,   "func":"_do_combo"},
+	"Melee": {"range":4.0, "cooldown":1.0,  "weight":3,   "func":"_do_melee"},
+	"MeleeCombo": {"range":4.0, "cooldown":2.0,  "weight":2,   "func":"_do_combo"},
 	"360Swing": {"range":6.0, "cooldown":3.0,  "weight":1,   "func":"_do_swing"},
 	"BattleCry": {"range":8.0, "cooldown":2.0, "weight":0.5, "func":"_do_battlecry"},
 	"HurricaneKick": {"range":4.0,"cooldown":4.0,  "weight":1,   "func":"_do_despair_combo", "desperation_only":true}
@@ -48,13 +48,13 @@ var moves = {
 
 ## ───────────────  Setup  ─────────────── ##
 func _ready():
-	randomize()
 	hp_bar.min_value = 0
 	hp_bar.max_value = max_health
 	hp_bar.value = health
 	anim_tree.active = true
 	_target_pos = global_transform.origin
 	_target_rot_y = rotation.y
+	randomize()
 	for name in moves.keys():
 		_last_used[name] = -INF
 	_nav_map = get_world().get_navigation_map()
@@ -138,39 +138,34 @@ func _state_machine(delta):
 				_choose_attack(state == State.DESPERATION)
 
 		State.ATTACK:
-			# if we’ve moved out of range mid-cooldown, go chase:
 			if not in_range:
 				_enter_state(State.CHASE)
-			# otherwise, once the cooldown timer hits zero, fire off another attack:
 			elif state_timer == 0:
 				_choose_attack(state == State.DESPERATION)
 
 		State.DESPERATION:
-			# optional: you could treat this as ATTACK mode with different params
 			if not in_range:
 				_enter_state(State.CHASE)
 			elif state_timer == 0:
+				_enter_state(State.ATTACK)
 				_choose_attack(true)
 
-	# 2) Movement: only when chasing or in desperation
+	# Movement only in CHASE
 	if state == State.CHASE and target:
 		_move_toward(target.global_transform.origin, delta)
 
-func _enter_state(new_state : int):
+func _enter_state(new_state: int) -> void:
 	state = new_state
 	state_timer = 0.0
-
 	match state:
 		State.IDLE:
-			sm.travel("Idle"); emit_signal("anim_changed", "Idle")
-
+			sm.travel("Idle")
+			emit_signal("anim_changed", "Idle")
 		State.CHASE, State.DESPERATION:
-			sm.travel("Run"); emit_signal("anim_changed", "Run")
-
+			sm.travel("Run")
+			emit_signal("anim_changed", "Run")
 		State.ATTACK:
-			# no-op—moves themselves call sm.travel()
 			pass
-
 
 func _pick_target():
 	var players = get_tree().get_nodes_in_group("players")
@@ -199,42 +194,38 @@ func _pick_target():
 
 func _choose_attack(desperation := false) -> void:
 	var dist = global_transform.origin.distance_to(target.global_transform.origin)
-	
+	var now  = OS.get_ticks_msec() / 1000.0
+
+	# build your candidate list exactly as before…
 	var candidates = []
 	for name in moves.keys():
 		var m = moves[name]
-		# skip desperation-only if we're not desperate
 		if m.has("desperation_only") and not desperation:
 			continue
-		# skip if out of range
 		if dist > m.range:
 			continue
-		# skip if still on cooldown
-		if OS.get_ticks_msec()/1000.0 - _last_used[name] < m.cooldown:
+		if now - _last_used[name] < m.cooldown:
 			continue
 		candidates.append(name)
-	
+
+	# fallback to melee if needed
 	if candidates.empty():
-		# fallback to basic melee
-		_do_melee()
-		state_timer = moves["Melee"].cooldown
-		_last_used["Melee"] = OS.get_ticks_msec()/1000.0
-		return
+		candidates = ["Melee"]
 
-	# 2) weighted random selection
-	var total_weight = 0.0
-	for name in candidates:
-		total_weight += moves[name].weight
-
-	var choice = randf() * total_weight
-	for name in candidates:
-		choice -= moves[name].weight
-		if choice <= 0.0:
-			# 3) invoke the move
-			call(moves[name].func)
-			state_timer = moves[name].cooldown
-			_last_used[name] = OS.get_ticks_msec()/1000.0
+	# weighted pick
+	var total = 0.0
+	for n in candidates:
+		total += moves[n].weight
+	var pick = randf() * total
+	for n in candidates:
+		pick -= moves[n].weight
+		if pick <= 0.0:
+			# perform the move
+			call(moves[n].func)
+			_last_used[n] = now
+			state_timer = moves[n].cooldown
 			return
+
 
 ## ───────────────  Moves (host only)  ─────────────── ##
 func _do_melee():
@@ -244,16 +235,7 @@ func _do_melee():
 	hit_area.monitoring = true
 	yield(anim_player, "animation_finished")
 	hit_area.monitoring = false
-	_enter_state(State.RECOVER); state_timer = 1.0
-
-func _do_hurricane_kick():
-	current_attack_dmg = 40
-	sm.travel("HurricaneKick")
-	emit_signal("anim_changed", "HurricaneKick")
-	hit_area.monitoring = true
-	yield(anim_player, "animation_finished")
-	hit_area.monitoring = false
-	_enter_state(State.RECOVER); state_timer = 2.0
+	state_timer = moves["Melee"].cooldown
 	
 func _do_combo() -> void:
 	current_attack_dmg = 25
@@ -262,19 +244,15 @@ func _do_combo() -> void:
 	hit_area.monitoring = true
 	yield(anim_player, "animation_finished")
 	hit_area.monitoring = false
-	_enter_state(State.RECOVER)
 	state_timer = moves["MeleeCombo"].cooldown
 	
 func _do_swing() -> void:
 	current_attack_dmg = 15
 	sm.travel("360Swing")
 	emit_signal("anim_changed", "360Swing")
-
 	hit_area.monitoring = true
 	yield(anim_player, "animation_finished")
 	hit_area.monitoring = false
-
-	_enter_state(State.RECOVER)
 	state_timer = moves["360Swing"].cooldown
 
 
@@ -283,10 +261,7 @@ func _do_battlecry() -> void:
 	# BattleCry might not deal damage, but could buff or intimidate
 	sm.travel("BattleCry")
 	emit_signal("anim_changed", "BattleCry")
-
 	yield(anim_player, "animation_finished")
-
-	_enter_state(State.RECOVER)
 	state_timer = moves["BattleCry"].cooldown
 
 
@@ -295,12 +270,9 @@ func _do_despair_combo() -> void:
 	current_attack_dmg = 40
 	sm.travel("HurricaneKick")      # reuse your HurricaneKick anim
 	emit_signal("anim_changed", "HurricaneKick")
-
 	hit_area.monitoring = true
 	yield(anim_player, "animation_finished")
 	hit_area.monitoring = false
-
-	_enter_state(State.RECOVER)
 	state_timer = moves["HurricaneKick"].cooldown
 
 ## ───────────────  Movement helpers (host) ─────────────── ##

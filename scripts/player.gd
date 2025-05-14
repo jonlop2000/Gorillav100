@@ -4,7 +4,7 @@ var Playroom = JavaScript.get_interface("Playroom")
 # ────────────────────────────────────────────────────────────────────
 #  Tunables
 # ────────────────────────────────────────────────────────────────────
-const BUSY_STATES = ["StandToRoll", "Punch", "Hook", "Hit", "Death"]
+const BUSY_STATES = ["Punch", "Hook", "Hit", "Death"]
 
 export var move_speed : float = 8.0
 export var jump_speed : float = 12.0
@@ -31,8 +31,8 @@ var profile_color : Color = Color.white
 #  Internal state
 # ────────────────────────────────────────────────────────────────────
 var _velocity        : Vector3  = Vector3.ZERO
-var _pending_roll    : bool     = false
 var _roll_timer      : float    = 0.0
+var _roll_dir   := Vector3.ZERO
 var _camera_pitch    : float    = 0.0
 const _pitch_min     : float    = deg2rad(-80)
 const _pitch_max     : float    = deg2rad( 60)
@@ -111,51 +111,77 @@ func _physics_process(delta):
 #  Local‑player movement & jumping
 # ────────────────────────────────────────────────────────────────────
 func _local_movement(delta):
-	# WASD → world‑space direction
-	var dir = Vector3(
-		Input.get_action_strength("move_right")  - Input.get_action_strength("move_left"),
-		0,
-		Input.get_action_strength("move_back")   - Input.get_action_strength("move_fwd")
-	).normalized()
-	dir = -global_transform.basis.z * dir.z + -global_transform.basis.x * dir.x
-	print("dir:", dir, "state:", _current_state)
-
-	# Ignore movement/attacks while an uninterruptible anim is playing
+	# ───── 0. If we're in an un‑interruptible clip, just slide and bail ─────
 	if BUSY_STATES.has(_current_state):
-		if is_local:
-			print("Locked by busy state:", _current_state)
 		_velocity = move_and_slide(_velocity, Vector3.UP)
 		return
 
-	# ── attacks ─
-	if Input.is_action_just_pressed("punch"):
-		_do_punch()
-		return
-	elif Input.is_action_just_pressed("hook"):
-		_do_hook()
-		return
+	# ───── 1. If we’re currently rolling, keep rolling and bail ─────
+	if _roll_timer > 0.0:
+		_roll_timer -= delta
+		_velocity = _roll_dir * roll_speed
+		_velocity.y += gravity * delta
+		_velocity = move_and_slide(_velocity, Vector3.UP)
+		if _roll_timer <= 0.0:
+			# roll finished – decide Idle vs Jog for the next frame
+			var dir = Vector3(
+				Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
+				0,
+				Input.get_action_strength("move_back")  - Input.get_action_strength("move_fwd")
+			).normalized()
+			if dir != Vector3.ZERO:
+				_travel("JogFwd")
+				_velocity = transform.basis.xform(dir) * move_speed
+			else:
+				_travel("Idle")
+				_velocity = Vector3.ZERO
+		return    # ← skip everything else while rolling
 
-	# ── roll ──
+	# ───── 2. NEW single‑key actions (they take precedence over movement) ─────
 	if Input.is_action_just_pressed("roll"):
-		_pending_roll = true
-		_roll_timer   = roll_time
+		_roll_dir = global_transform.basis.z       # forward
+		_roll_timer = roll_time
 		_travel("StandToRoll")
+		Playroom.RPC.call("roll", {
+			"dir": _roll_dir,              
+			"t": OS.get_ticks_msec()     
+		}, Playroom.RPC.Mode.OTHERS)
 
-	if _pending_roll:
-		_handle_roll(delta)
-	else:
+		return
+	if Input.is_action_just_pressed("punch"):
+		_do_punch()        
+		return
+	if Input.is_action_just_pressed("hook"):
+		_do_hook()           #
+		return
+
+	# ───── 3. Normal WASD / jump movement ─────
+	var dir = Vector3(
+		Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
+		0,
+		Input.get_action_strength("move_back")  - Input.get_action_strength("move_fwd")
+	).normalized()
+	dir = -global_transform.basis.z * dir.z + -global_transform.basis.x * dir.x
+
+	if dir != Vector3.ZERO:
 		_velocity.x = dir.x * move_speed
 		_velocity.z = dir.z * move_speed
-		# jump / gravity
-		if is_on_floor():
-			if Input.is_action_just_pressed("jump"):
-				_velocity.y = jump_speed
-		else:
-			_velocity.y += gravity * delta
+	else:
+		_velocity.x = lerp(_velocity.x, 0, 0.2)
+		_velocity.z = lerp(_velocity.z, 0, 0.2)
+
+	# gravity / jump
+	if is_on_floor():
+		if Input.is_action_just_pressed("jump"):
+			_velocity.y = jump_speed
+	else:
+		_velocity.y += gravity * delta
+
+	# move & update smoothed speed
 	_velocity = move_and_slide(_velocity, Vector3.UP)
-	# update smoothed speed for FSM
-	var raw_speed = Vector3(_velocity.x, 0, _velocity.z).length()
-	_smoothed_speed = lerp(_smoothed_speed, raw_speed, delta * 10.0)
+	var h_speed = Vector3(_velocity.x, 0, _velocity.z).length()
+	_smoothed_speed = lerp(_smoothed_speed, h_speed, delta * 10.0)
+
 
 # ────────────────────────────────────────────────────────────────────
 #  Remote avatar helper – estimate velocity for animations
@@ -174,15 +200,12 @@ func _calc_remote_velocity(delta):
 # ────────────────────────────────────────────────────────────────────
 func _handle_roll(delta):
 	_roll_timer -= delta
-	if _roll_timer <= 0.0:
-		_pending_roll = false
-		_travel("Idle")
-		return
-
+	# just move you forward while rolling
 	var fwd = -global_transform.basis.z
 	_velocity = fwd * roll_speed
 	_velocity.y += gravity * delta
-	_velocity   = move_and_slide(_velocity, Vector3.UP)
+	_velocity = move_and_slide(_velocity, Vector3.UP)
+
 
 # ────────────────────────────────────────────────────────────────────
 #  Animation via AnimationTree StateMachine
@@ -200,21 +223,23 @@ func _do_punch():
 func _do_hook():
 	_travel("Hook")
 	Playroom.RPC.call("hook", {}, Playroom.RPC.Mode.OTHERS)
+	
+# called only by the manager when someone else rolls
+func _start_remote_roll() -> void:
+	_travel("StandToRoll")
+	_roll_timer = roll_time     # so _update_animation() keeps it in Idle afterwards
+
 
 func _update_animation(delta):
 	# --- keep cache in sync ---
 	var tree_state = _sm.get_current_node()
 	if tree_state != _current_state:
 		_current_state = tree_state
-
-	if _pending_roll:
-		_travel("StandToRoll")
-		return
-
+	
 	if BUSY_STATES.has(_current_state):
 		return
 	var speed = _smoothed_speed
-	if _smoothed_speed > 0.25:
+	if speed > 0.1:          # was 0.25
 		_travel("JogFwd")
-	elif _smoothed_speed < 0.15:
+	elif speed < 0.05:       # was 0.15
 		_travel("Idle")

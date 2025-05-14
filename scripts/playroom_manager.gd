@@ -99,6 +99,7 @@ func _ready():
 	JavaScript.eval("")   # initialise bridge
 	Playroom.RPC.register("punch", _bridge("_on_punch"))
 	Playroom.RPC.register("hook", _bridge("_on_hook"))
+	Playroom.RPC.register("roll", _bridge("_on_roll"))
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
 		opts.gameId = "I2okszCMAwuMeW4fxFGD"
@@ -133,6 +134,17 @@ func _on_hook(args):
 		var node = players[sender_id].node
 		if node and node.has_method("_travel"):
 			node._travel("Hook")
+			
+func _on_roll(args):
+	var sender_state = args[1]           
+	if sender_state == null:
+		return
+	var id = str(sender_state.id)
+	if players.has(id):
+		var node = players[id].node
+		if node and node.has_method("_start_remote_roll"):
+			node._start_remote_roll()
+
 
 
 # ---------------------------------------------------------------------#
