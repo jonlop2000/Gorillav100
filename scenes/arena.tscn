@@ -33,7 +33,7 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0130619, 0 )
 navmesh = SubResource( 3 )
 
 [node name="GridMap" type="GridMap" parent="Navigation/NavigationMeshInstance"]
-transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 1.3382, -0.166039, 0.364163 )
+transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 1.34199, -0.166039, 0.388121 )
 mesh_library = ExtResource( 2 )
 cell_size = Vector3( 0.5, 0.25, 0.5 )
 bake_navigation = true

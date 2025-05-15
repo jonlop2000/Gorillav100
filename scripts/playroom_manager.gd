@@ -102,6 +102,7 @@ func _ready():
 	Playroom.RPC.register("punch", _bridge("_on_punch"))
 	Playroom.RPC.register("hook", _bridge("_on_hook"))
 	Playroom.RPC.register("roll", _bridge("_on_roll"))
+	Playroom.RPC.register("apply_knockback", _bridge("_on_knockback"))
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
 		opts.gameId = "I2okszCMAwuMeW4fxFGD"
@@ -162,6 +163,36 @@ func _on_roll(args):
 		var node = players[id].node
 		if node and node.has_method("_start_remote_roll"):
 			node._start_remote_roll(data)
+			
+	
+func _on_knockback(args: Array) -> void:
+	if args.size() < 1:
+		return
+
+	var raw = args[0]
+	if typeof(raw) != TYPE_STRING:
+		push_error("apply_knockback RPC: expected String, got %s" % typeof(raw))
+		return
+
+	var parsed = JSON.parse(raw)
+	if parsed.error != OK:
+		push_error("apply_knockback RPC: JSON.parse error %s" % parsed.error_string)
+		return
+
+	var data = parsed.result   # now a Dictionary
+	var target_id = str(data.get("target_id",""))
+	if not players.has(target_id):
+		return
+
+	var dir_arr = data.get("direction", [])
+	if dir_arr.size() != 3:
+		return
+
+	var dir   = Vector3(dir_arr[0], dir_arr[1], dir_arr[2])
+	var force = float(data.get("force", 0.0))
+
+	var player_node = players[target_id].node
+	player_node.remote_apply_knockback(dir, force)
 
 # ---------------------------------------------------------------------#
 #  Lobby / join / quit                                                 #

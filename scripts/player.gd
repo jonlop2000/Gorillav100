@@ -7,8 +7,8 @@ var Playroom = JavaScript.get_interface("Playroom")
 const BUSY_STATES = ["Punch", "Hook", "Hit", "Death"]
 
 export var move_speed : float = 10.0
-export var jump_speed : float = 12.0
-export var gravity : float = -24.0
+export var jump_speed : float = 10.0
+export var gravity : float = -28.0
 export var mouse_sensitivity : float = 0.002
 export var roll_speed : float = 18.0
 export var roll_time : float = 0.8
@@ -21,6 +21,11 @@ var _current_anim : String = ""
 var _smoothed_speed : float = 0.0      # shared by both local & remote
 var _current_state : String = ""
 var health := max_health
+
+var _kb_vel: Vector3 = Vector3.ZERO
+var _kb_timer: float = 0.0
+var _recover_after_kb: bool = false
+
 # ────────────────────────────────────────────────────────────────────
 #  Public flags set by PlayroomManager
 # ────────────────────────────────────────────────────────────────────
@@ -98,6 +103,18 @@ func _input(event):
 #  Main loop
 # ────────────────────────────────────────────────────────────────────
 func _physics_process(delta):
+	# —— KNOCKBACK OVERRIDE ——
+	if _kb_timer > 0.0:
+		_kb_timer -= delta
+		# apply the impulse + gravity
+		_velocity = _kb_vel + Vector3(0, -9.8 * delta, 0)
+		_velocity = move_and_slide(_velocity, Vector3.UP)
+		
+		if _kb_timer <= 0.0 and _recover_after_kb:
+			_recover_after_kb = false
+			
+		return   # skip all your normal movement & interp
+
 	if is_local:
 		_local_movement(delta)
 	else:
@@ -229,10 +246,17 @@ func _do_punch():
 	_travel("Punch")
 	Playroom.RPC.call("punch", {}, Playroom.RPC.Mode.OTHERS)
 	
-func _do_hook():
+func _do_hook(): 
 	_travel("Hook")
 	Playroom.RPC.call("hook", {}, Playroom.RPC.Mode.OTHERS)
 	
+func remote_apply_knockback(dir: Vector3, force: float) -> void:
+	_kb_vel   = dir * force
+	_kb_timer = 0.3
+	_recover_after_kb  = true
+	_travel("KnockBack")
+
+
 # called only by the manager when someone else rolls
 # called by PlayroomManager when a roll RPC arrives
 func _start_remote_roll(data: Dictionary) -> void:

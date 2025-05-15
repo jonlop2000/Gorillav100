@@ -7,11 +7,14 @@ extends KinematicBody
 enum State { IDLE, CHASE, ATTACK, RECOVER, DESPERATION }
 
 export(int)   var max_health := 2000
-export(float) var move_speed := 4.0
-export(float) var attack_range := 1.0
+export(float) var move_speed := 2.0
+export(float) var attack_range := 2.0
 export(float) var rotation_speed := 5.0
 
 ## ───────────────  Runtime  ─────────────── ##
+
+var Playroom = JavaScript.get_interface("Playroom")
+
 var health : int  = max_health
 var state : int  = State.IDLE
 var state_timer : float = 0.0
@@ -128,14 +131,12 @@ func _state_machine(delta):
 		State.IDLE:
 			if in_range:
 				_enter_state(State.ATTACK)
-				_choose_attack(state == State.DESPERATION)
 			else:
 				_enter_state(State.CHASE)
 
 		State.CHASE:
 			if in_range:
 				_enter_state(State.ATTACK)
-				_choose_attack(state == State.DESPERATION)
 
 		State.ATTACK:
 			if not in_range:
@@ -158,6 +159,7 @@ func _enter_state(new_state: int) -> void:
 	state = new_state
 	state_timer = 0.0
 	match state:
+		
 		State.IDLE:
 			sm.travel("Idle")
 			emit_signal("anim_changed", "Idle")
@@ -254,13 +256,36 @@ func _do_swing() -> void:
 	yield(anim_player, "animation_finished")
 	hit_area.monitoring = false
 	state_timer = moves["360Swing"].cooldown
+	
 
-
-# called when moves["BattleCry"].func == "_do_battlecry"
 func _do_battlecry() -> void:
-	# BattleCry might not deal damage, but could buff or intimidate
+	current_attack_dmg = 0
 	sm.travel("BattleCry")
 	emit_signal("anim_changed", "BattleCry")
+
+	if is_host:
+		for p in get_tree().get_nodes_in_group("players"):
+			var d = global_transform.origin.distance_to(p.global_transform.origin)
+			if d <= moves["BattleCry"].range:
+				# build a *pure-GDScript* payload with only primitive types
+				var payload = {
+					"target_id": p.name.replace("player_", ""),
+					"direction": [
+						p.global_transform.origin.x - global_transform.origin.x,
+						p.global_transform.origin.y - global_transform.origin.y,
+						p.global_transform.origin.z - global_transform.origin.z
+					],
+					"force": 20.0
+				}
+				# stringify it
+				var raw = JSON.print(payload)
+				# call RPC with (name, string, mode)
+				Playroom.RPC.call(
+					"apply_knockback",
+					raw,
+					Playroom.RPC.Mode.ALL   
+				)
+
 	yield(anim_player, "animation_finished")
 	state_timer = moves["BattleCry"].cooldown
 
