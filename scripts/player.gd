@@ -6,11 +6,11 @@ var Playroom = JavaScript.get_interface("Playroom")
 # ────────────────────────────────────────────────────────────────────
 const BUSY_STATES = ["Punch", "Hook", "Hit", "Death"]
 
-export var move_speed : float = 8.0
+export var move_speed : float = 10.0
 export var jump_speed : float = 12.0
 export var gravity : float = -24.0
 export var mouse_sensitivity : float = 0.002
-export var roll_speed : float = 15.0
+export var roll_speed : float = 18.0
 export var roll_time : float = 0.8
 export(int) var max_health := 100
 onready var _tree : AnimationTree = $visuals/Soldier/AnimationTree

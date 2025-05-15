@@ -7,8 +7,8 @@ extends KinematicBody
 enum State { IDLE, CHASE, ATTACK, RECOVER, DESPERATION }
 
 export(int)   var max_health := 2000
-export(float) var move_speed := 5.0
-export(float) var attack_range := 3.0
+export(float) var move_speed := 4.0
+export(float) var attack_range := 1.0
 export(float) var rotation_speed := 5.0
 
 ## ───────────────  Runtime  ─────────────── ##
@@ -39,11 +39,11 @@ signal anim_changed(anim_name)
 signal health_changed(hp)
 
 var moves = {
-	"Melee": {"range":4.0, "cooldown":1.0,  "weight":3,   "func":"_do_melee"},
-	"MeleeCombo": {"range":4.0, "cooldown":2.0,  "weight":2,   "func":"_do_combo"},
-	"360Swing": {"range":6.0, "cooldown":3.0,  "weight":1,   "func":"_do_swing"},
-	"BattleCry": {"range":8.0, "cooldown":2.0, "weight":0.5, "func":"_do_battlecry"},
-	"HurricaneKick": {"range":4.0,"cooldown":4.0,  "weight":1,   "func":"_do_despair_combo", "desperation_only":true}
+	"Melee": {"range":1.0, "cooldown":1.0,  "weight":3,   "func":"_do_melee"},
+	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":2,   "func":"_do_combo"},
+	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1,   "func":"_do_swing"},
+	"BattleCry": {"range":3.0, "cooldown":2.0, "weight":0.5, "func":"_do_battlecry"},
+	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1,   "func":"_do_despair_combo", "desperation_only":true}
 }
 
 ## ───────────────  Setup  ─────────────── ##

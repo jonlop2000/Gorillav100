@@ -26,8 +26,8 @@ var _accum_boss   := 0.0
 var _js_refs := []
 
 # cached node look‑ups
-onready var _players_root = get_tree().get_root().get_node("prototype/Players")
-onready var _boss_parent  = get_tree().get_root().get_node("prototype/Navigation/NavigationMeshInstance/Boss")
+onready var _players_root = get_tree().get_root().get_node("arena/Players")
+onready var _boss_parent  = get_tree().get_root().get_node("arena/Navigation/NavigationMeshInstance/GridMap/Boss")
 
 # ---------------------------------------------------------------------#
 #  Helpers                                                             #
@@ -55,7 +55,7 @@ func _spawn_player(state):
 		var hud = PLAYER_HUD_SCENE.instance()
 		# this assumes your HUD script has an `export(NodePath) var player_path`
 		hud.player_path = inst.get_path()
-		var ui_parent = get_tree().get_root().get_node("prototype/UI")
+		var ui_parent = get_tree().get_root().get_node("arena/UI")
 		ui_parent.add_child(hud)
 	else:
 		inst.make_remote()
@@ -83,6 +83,8 @@ func _pack_player(node:Node) -> Dictionary:
 
 
 func _pack_boss() -> Dictionary:
+	if boss_node == null:
+		return {}  
 	return {
 		"px": boss_node.global_transform.origin.x,
 		"py": boss_node.global_transform.origin.y,
@@ -165,32 +167,36 @@ func _on_roll(args):
 #  Lobby / join / quit                                                 #
 # ---------------------------------------------------------------------#
 func _on_insert_coin(_args):
+	# 1) register future join events
 	Playroom.onPlayerJoin(_bridge("_on_player_join"))
-	if Playroom.isHost():
-		# Host also gets a callback for itself; wait till that fires to have players dict filled
+	# 2) force-spawn *your* player
+	var me_state = Playroom.me()
+	var me_id    = str(me_state.id)
+	if not players.has(me_id):
+		var me_node = _spawn_player(me_state)   # calls make_local() internally
+		players[me_id] = { "state": me_state, "node": me_node }
+	# 3) spawn boss & push the room snapshot (host only)
+	if boss_node == null:
 		boss_node = _spawn_boss()
+	# host pushes the real boss state
+	if Playroom.isHost():
 		Playroom.setState("boss", JSON.print(_pack_boss()))
 		_push_room_init_snapshot()
+
 
 func _on_player_join(args):
 	var state = args[0]
 	var id    = str(state.id)
-
-	# reuse local avatar if this is me, otherwise spawn
-	var node : Node = null
+	# skip yourself (you already spawned in _on_insert_coin)
 	if id == str(Playroom.me().id):
-		node = _players_root.get_node_or_null("player_%s" % id)
-		if node == null:
-			node = _spawn_player(state)
-	else:
-		node = _spawn_player(state)
-
-	players[id] = { "state":state, "node":node }
-
-	# late‑joiners: if boss already exists on host, spawn placeholder
+		return
+	# spawn everyone else as remote
+	var node = _spawn_player(state)
+	players[id] = { "state": state, "node": node }
+	# late-joiners: if boss already exists on host, spawn placeholder
 	if not boss_node and not Playroom.isHost():
 		boss_node = _spawn_boss()
-
+	# wire up quit handling
 	state.onQuit(_bridge("_on_player_quit"))
 
 func _on_player_quit(args):
