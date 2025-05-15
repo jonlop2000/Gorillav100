@@ -1,4 +1,4 @@
-[gd_scene load_steps=64 format=2]
+[gd_scene load_steps=69 format=2]
 
 [ext_resource path="res://assets/Soldier/Skin.material" type="Material" id=1]
 [ext_resource path="res://assets/Soldier/Black.material" type="Material" id=2]
@@ -2837,6 +2837,9 @@ animation = "JogFwd"
 [sub_resource type="AnimationNodeAnimation" id=99]
 animation = "Jump"
 
+[sub_resource type="AnimationNodeAnimation" id=120]
+animation = "Death"
+
 [sub_resource type="AnimationNodeAnimation" id=89]
 animation = "Punch"
 
@@ -2943,6 +2946,22 @@ xfade_time = 0.1
 [sub_resource type="AnimationNodeStateMachineTransition" id=119]
 xfade_time = 0.1
 
+[sub_resource type="AnimationNodeStateMachineTransition" id=121]
+switch_mode = 2
+auto_advance = true
+xfade_time = 1.0
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=122]
+xfade_time = 0.2
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=123]
+switch_mode = 2
+auto_advance = true
+xfade_time = 0.2
+
+[sub_resource type="AnimationNodeStateMachineTransition" id=124]
+xfade_time = 0.2
+
 [sub_resource type="AnimationNodeStateMachine" id=81]
 states/Death/node = SubResource( 105 )
 states/Death/position = Vector2( -495.323, -691 )
@@ -2956,18 +2975,20 @@ states/JogFwd/node = SubResource( 85 )
 states/JogFwd/position = Vector2( -389.323, -329 )
 states/Jump/node = SubResource( 99 )
 states/Jump/position = Vector2( -16.3235, -919 )
+states/KnockBack/node = SubResource( 120 )
+states/KnockBack/position = Vector2( 268.677, -691 )
 states/Punch/node = SubResource( 89 )
 states/Punch/position = Vector2( -782.323, -476 )
 states/StandToRoll/node = SubResource( 100 )
 states/StandToRoll/position = Vector2( -782.323, -919 )
-transitions = [ "Idle", "JogFwd", SubResource( 86 ), "JogFwd", "Idle", SubResource( 87 ), "Punch", "Idle", SubResource( 90 ), "Idle", "Punch", SubResource( 91 ), "Hook", "Idle", SubResource( 92 ), "Idle", "Hook", SubResource( 93 ), "Hook", "JogFwd", SubResource( 94 ), "JogFwd", "Hook", SubResource( 95 ), "Punch", "JogFwd", SubResource( 96 ), "JogFwd", "Punch", SubResource( 97 ), "StandToRoll", "Idle", SubResource( 101 ), "Idle", "StandToRoll", SubResource( 102 ), "Jump", "Idle", SubResource( 103 ), "Idle", "Jump", SubResource( 104 ), "StandToRoll", "JogFwd", SubResource( 106 ), "JogFwd", "StandToRoll", SubResource( 107 ), "Jump", "JogFwd", SubResource( 108 ), "JogFwd", "Jump", SubResource( 109 ), "Hit", "Idle", SubResource( 110 ), "Idle", "Hit", SubResource( 111 ), "JogFwd", "Hit", SubResource( 112 ), "Hit", "JogFwd", SubResource( 113 ), "Idle", "Death", SubResource( 114 ), "StandToRoll", "Death", SubResource( 115 ), "Punch", "Death", SubResource( 116 ), "JogFwd", "Death", SubResource( 117 ), "Hook", "Death", SubResource( 118 ), "Jump", "Death", SubResource( 119 ) ]
+transitions = [ "Idle", "JogFwd", SubResource( 86 ), "JogFwd", "Idle", SubResource( 87 ), "Punch", "Idle", SubResource( 90 ), "Idle", "Punch", SubResource( 91 ), "Hook", "Idle", SubResource( 92 ), "Idle", "Hook", SubResource( 93 ), "Hook", "JogFwd", SubResource( 94 ), "JogFwd", "Hook", SubResource( 95 ), "Punch", "JogFwd", SubResource( 96 ), "JogFwd", "Punch", SubResource( 97 ), "StandToRoll", "Idle", SubResource( 101 ), "Idle", "StandToRoll", SubResource( 102 ), "Jump", "Idle", SubResource( 103 ), "Idle", "Jump", SubResource( 104 ), "StandToRoll", "JogFwd", SubResource( 106 ), "JogFwd", "StandToRoll", SubResource( 107 ), "Jump", "JogFwd", SubResource( 108 ), "JogFwd", "Jump", SubResource( 109 ), "Hit", "Idle", SubResource( 110 ), "Idle", "Hit", SubResource( 111 ), "JogFwd", "Hit", SubResource( 112 ), "Hit", "JogFwd", SubResource( 113 ), "Idle", "Death", SubResource( 114 ), "StandToRoll", "Death", SubResource( 115 ), "Punch", "Death", SubResource( 116 ), "JogFwd", "Death", SubResource( 117 ), "Hook", "Death", SubResource( 118 ), "Jump", "Death", SubResource( 119 ), "KnockBack", "Idle", SubResource( 121 ), "Idle", "KnockBack", SubResource( 122 ), "KnockBack", "JogFwd", SubResource( 123 ), "JogFwd", "KnockBack", SubResource( 124 ) ]
 start_node = "Idle"
-graph_offset = Vector2( -859.323, -580 )
+graph_offset = Vector2( -1036.32, -1066 )
 
 [sub_resource type="AnimationNodeTimeScale" id=82]
 
 [sub_resource type="AnimationNodeBlendTree" id=83]
-graph_offset = Vector2( -410, 50 )
+graph_offset = Vector2( -409.602, 26.5467 )
 nodes/StateMachine/node = SubResource( 81 )
 nodes/StateMachine/position = Vector2( -260, 80 )
 nodes/TS/node = SubResource( 82 )
@@ -2975,6 +2996,7 @@ nodes/TS/position = Vector2( 20, 120 )
 node_connections = [ "TS", 0, "StateMachine", "output", 0, "TS" ]
 
 [node name="player" type="KinematicBody" groups=["players"]]
+transform = Transform( 0.25, 0, 0, 0, 0.25, 0, 0, 0, 0.25, 0, 0, 0 )
 collision_layer = 3
 script = ExtResource( 7 )
 
@@ -3162,7 +3184,7 @@ mesh = SubResource( 14 )
 skin = SubResource( 2 )
 
 [node name="BoneAttachment" type="BoneAttachment" parent="visuals/Soldier/Armature/Skeleton"]
-transform = Transform( 0.476365, -0.692112, -0.542272, 0.639788, 0.695906, -0.326171, 0.603117, -0.191564, 0.774309, 13.7465, 88.7364, -127.838 )
+transform = Transform( 0.401906, -0.718896, -0.567151, 0.734308, 0.623065, -0.269412, 0.547051, -0.308186, 0.778305, 1.45746, 96.8717, -135.322 )
 bone_name = "mixamorig_LeftHand"
 
 [node name="HitArea" type="Area" parent="visuals/Soldier/Armature/Skeleton/BoneAttachment"]
