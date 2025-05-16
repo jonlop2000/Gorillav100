@@ -48,11 +48,11 @@ signal anim_changed(anim_name)
 signal health_changed(hp)
 
 var moves = {
-	"Melee": {"range":1.0, "cooldown":1.0,  "weight":3,   "func":"_do_melee"},
-	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":2,   "func":"_do_combo"},
-	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1,   "func":"_do_swing"},
-	"BattleCry": {"range":3.0, "cooldown":2.0, "weight":0.5, "func":"_do_battlecry"},
-	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1,   "func":"_do_despair_combo", "desperation_only":true}
+	"Melee": {"range":1.0, "cooldown":1.0,  "weight":4, "knockback": 0.0, "func":"_do_melee"},
+	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":2, "knockback": 0.0, "func":"_do_combo"},
+	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1, "knockback": 13.0, "func":"_do_swing"},
+	"BattleCry": {"range":3.0, "cooldown":2.0, "weight":0.5, "knockback": 10.0, "func":"_do_battlecry"},
+	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0,  "func":"_do_despair_combo", "desperation_only":true}
 }
 
 ## ───────────────  Setup  ─────────────── ##
@@ -102,6 +102,33 @@ func apply_remote_state(d : Dictionary) -> void:
 func _ensure_anim(name : String) -> void:
 	if sm.get_current_node() != name:
 		sm.travel(name)
+		
+
+# ─────────── helper method ───────────
+func _broadcast_knockback(move_name:String) -> void:
+	if not is_host:
+		return
+
+	var m = moves.get(move_name, null)
+	if m == null:
+		push_error("Unknown move for knockback: %s" % move_name)
+		return
+
+	for p in get_tree().get_nodes_in_group("players"):
+		var d = global_transform.origin.distance_to(p.global_transform.origin)
+		if d <= m.range:
+			var payload = {
+				"target_id": p.name.replace("player_",""),
+				"direction": [
+					p.global_transform.origin.x - global_transform.origin.x,
+					p.global_transform.origin.y - global_transform.origin.y,
+					p.global_transform.origin.z - global_transform.origin.z
+				],
+				"force": m.knockback
+			}
+			var raw = JSON.print(payload)
+			Playroom.RPC.call("apply_knockback", raw, Playroom.RPC.Mode.ALL)
+
 
 ## ───────────────  Host‑only physics / AI  ─────────────── ##
 func _physics_process(delta):
@@ -290,6 +317,7 @@ func _do_swing() -> void:
 	hit_area.monitoring = true
 	yield(anim_player, "animation_finished")
 	hit_area.monitoring = false
+	_broadcast_knockback("360Swing")
 	state_timer = moves["360Swing"].cooldown
 
 
@@ -298,26 +326,9 @@ func _do_battlecry() -> void:
 	sm.travel("BattleCry")
 	emit_signal("anim_changed", "BattleCry")
 	yield(anim_player, "animation_finished")
+	_broadcast_knockback("BattleCry")
 	state_timer = moves["BattleCry"].cooldown
 
-
-func _apply_battlecry_knockback() -> void:
-	if not is_host:
-		return
-	for p in get_tree().get_nodes_in_group("players"):
-		var d = global_transform.origin.distance_to(p.global_transform.origin)
-		if d <= moves["BattleCry"].range:
-			var payload = {
-				"target_id": p.name.replace("player_", ""),
-				"direction": [
-					p.global_transform.origin.x - global_transform.origin.x,
-					p.global_transform.origin.y - global_transform.origin.y,
-					p.global_transform.origin.z - global_transform.origin.z
-				],
-				"force": 20.0
-			}
-			var raw = JSON.print(payload)
-			Playroom.RPC.call("apply_knockback", raw, Playroom.RPC.Mode.ALL)
 
 # called when moves["HurricaneKick"].func == "_do_despair_combo"
 func _do_despair_combo() -> void:
