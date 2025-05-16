@@ -4,13 +4,15 @@
 extends KinematicBody
 
 ## ───────────────  Tunables  ─────────────── ##
-enum State { IDLE, CHASE, ATTACK, RECOVER, DESPERATION }
+enum State { IDLE, CHASE, ATTACK, RECOVER, DESPERATION, JUMP, FALL }
 
 export(int)   var max_health := 2000
 export(float) var move_speed := 2.0
 export(float) var attack_range := 2.0
 export(float) var rotation_speed := 5.0
-
+export(float) var jump_speed = 12.0
+export(float) var jump_height_threshold = 1.5 
+export(float) var gravity = 9.8
 ## ───────────────  Runtime  ─────────────── ##
 
 var Playroom = JavaScript.get_interface("Playroom")
@@ -25,7 +27,10 @@ var _nav_map : RID
 var _target_pos   : Vector3
 var _target_rot_y : float
 var _last_used = {}
-
+var _vert_vel: float = 0.0 
+var _velocity: Vector3 = Vector3.ZERO
+var _airborne: bool = false
+var _grounded : bool = false
 
 ##  AnimationTree shortcuts
 onready var anim_tree : AnimationTree  = $visual/GorillaBossGD/AnimationTree
@@ -36,6 +41,7 @@ onready var anim_player : AnimationPlayer = $visual/GorillaBossGD/AnimationPlaye
 onready var nav_agent : NavigationAgent = $NavigationAgent
 onready var hit_area = $visual/GorillaBossGD/Armature/Skeleton/BoneAttachment/HitArea
 onready var hp_bar = $HealthViewport/UIRoot/Healthbar
+onready var ground_ray = $RayCast
 
 ##  Signals  (manager listens to these)
 signal anim_changed(anim_name)
@@ -99,6 +105,7 @@ func _ensure_anim(name : String) -> void:
 
 ## ───────────────  Host‑only physics / AI  ─────────────── ##
 func _physics_process(delta):
+	_grounded = ground_ray.is_colliding()
 	if is_host:
 		_state_machine(delta)
 		_update_hp_bar()
@@ -137,6 +144,17 @@ func _state_machine(delta):
 		State.CHASE:
 			if in_range:
 				_enter_state(State.ATTACK)
+			else:
+				var dy = target.global_transform.origin.y - global_transform.origin.y
+				if _grounded and dy > jump_height_threshold:
+					_enter_state(State.JUMP)
+
+		State.JUMP:
+			print("--- In JUMP state --- airborne=", _airborne, " on_floor=", is_on_floor())
+			if not _airborne and not _grounded:
+				_airborne = true
+			elif _airborne and _grounded:
+				_enter_state(State.CHASE)
 
 		State.ATTACK:
 			if not in_range:
@@ -154,20 +172,37 @@ func _state_machine(delta):
 	# Movement only in CHASE
 	if state == State.CHASE and target:
 		_move_toward(target.global_transform.origin, delta)
+	
+	elif state == State.JUMP:
+		var dir = (target.global_transform.origin - global_transform.origin)
+		dir.y = 0
+		dir = dir.normalized() * move_speed
+		
+		_vert_vel -= 9.8 * delta
+		var vel = Vector3(dir.x, _vert_vel, dir.z)
+		_velocity = move_and_slide(vel, Vector3.UP)
+		return
 
 func _enter_state(new_state: int) -> void:
 	state = new_state
 	state_timer = 0.0
+	
 	match state:
-		
 		State.IDLE:
 			sm.travel("Idle")
 			emit_signal("anim_changed", "Idle")
 		State.CHASE, State.DESPERATION:
 			sm.travel("Run")
 			emit_signal("anim_changed", "Run")
+			nav_agent.set_physics_process(true)
 		State.ATTACK:
 			pass
+		State.JUMP:
+			sm.travel("Run")
+			emit_signal("anim_changed", "Run")
+			nav_agent.set_physics_process(false)
+			_vert_vel = jump_speed
+			_airborne = false
 
 func _pick_target():
 	var players = get_tree().get_nodes_in_group("players")
@@ -304,26 +339,50 @@ func _do_despair_combo() -> void:
 func _move_toward(dest: Vector3, delta: float) -> void:
 	if not is_host:
 		return
+
+	# ─── HORIZONTAL ───
 	nav_agent.set_target_location(dest)
-	# if we’ve no path or already there, bail
 	if nav_agent.is_navigation_finished():
+		# no nav target → maybe just fall?
+		_apply_vertical(delta)
 		return
 
 	var next_pt = nav_agent.get_next_location()
-	var dir     = next_pt - global_transform.origin
+	var dir     = (next_pt - global_transform.origin)
 	dir.y = 0
 	if dir.length() < 0.01:
+		# too close, only apply gravity
+		_apply_vertical(delta)
 		return
 	dir = dir.normalized()
 
-	# rotate smoothly toward dest
-	var look = dest - global_transform.origin
+	# smooth rotation toward your final DEST, not just the next_pt
+	var look = (dest - global_transform.origin)
 	look.y = 0
 	if look.length() > 0:
 		var t_rot = atan2(look.x, look.z)
 		rotation.y = lerp_angle(rotation.y, t_rot, rotation_speed * delta)
 
-	move_and_slide(dir * move_speed, Vector3.UP)
+	# ─── VERTICAL ───
+	_apply_vertical(delta)
+
+	# ─── COMBINE & MOVE ───
+	var full_vel = Vector3(dir.x * move_speed,
+						   _vert_vel,
+						   dir.z * move_speed)
+	_velocity = move_and_slide(full_vel, Vector3.UP)
+
+func _apply_vertical(delta: float) -> void:
+	match state:
+		State.JUMP:
+			_vert_vel -= gravity * delta
+		_:
+			# fall when not grounded
+			if not _grounded:
+				_vert_vel -= gravity * delta
+			else:
+				_vert_vel = 0.0
+
 
 
 func _direct_steer(dest: Vector3, delta: float) -> void:
