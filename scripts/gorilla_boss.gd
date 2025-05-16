@@ -291,39 +291,33 @@ func _do_swing() -> void:
 	yield(anim_player, "animation_finished")
 	hit_area.monitoring = false
 	state_timer = moves["360Swing"].cooldown
-	
+
 
 func _do_battlecry() -> void:
 	current_attack_dmg = 0
 	sm.travel("BattleCry")
 	emit_signal("anim_changed", "BattleCry")
-
-	if is_host:
-		for p in get_tree().get_nodes_in_group("players"):
-			var d = global_transform.origin.distance_to(p.global_transform.origin)
-			if d <= moves["BattleCry"].range:
-				# build a *pure-GDScript* payload with only primitive types
-				var payload = {
-					"target_id": p.name.replace("player_", ""),
-					"direction": [
-						p.global_transform.origin.x - global_transform.origin.x,
-						p.global_transform.origin.y - global_transform.origin.y,
-						p.global_transform.origin.z - global_transform.origin.z
-					],
-					"force": 20.0
-				}
-				# stringify it
-				var raw = JSON.print(payload)
-				# call RPC with (name, string, mode)
-				Playroom.RPC.call(
-					"apply_knockback",
-					raw,
-					Playroom.RPC.Mode.ALL   
-				)
-
 	yield(anim_player, "animation_finished")
 	state_timer = moves["BattleCry"].cooldown
 
+
+func _apply_battlecry_knockback() -> void:
+	if not is_host:
+		return
+	for p in get_tree().get_nodes_in_group("players"):
+		var d = global_transform.origin.distance_to(p.global_transform.origin)
+		if d <= moves["BattleCry"].range:
+			var payload = {
+				"target_id": p.name.replace("player_", ""),
+				"direction": [
+					p.global_transform.origin.x - global_transform.origin.x,
+					p.global_transform.origin.y - global_transform.origin.y,
+					p.global_transform.origin.z - global_transform.origin.z
+				],
+				"force": 20.0
+			}
+			var raw = JSON.print(payload)
+			Playroom.RPC.call("apply_knockback", raw, Playroom.RPC.Mode.ALL)
 
 # called when moves["HurricaneKick"].func == "_do_despair_combo"
 func _do_despair_combo() -> void:
