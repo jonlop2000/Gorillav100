@@ -13,6 +13,8 @@ export var mouse_sensitivity : float = 0.002
 export var roll_speed : float = 18.0
 export var roll_time : float = 0.8
 export(int) var max_health := 100
+export(int) var punch_damage = 10
+export(int) var hook_damage  = 25
 onready var _tree : AnimationTree = $visuals/Soldier/AnimationTree
 onready var _sm : AnimationNodeStateMachinePlayback = _tree.get("parameters/StateMachine/playback")
 
@@ -244,11 +246,13 @@ func _travel(state_name : String) -> void:
 
 func _do_punch():
 	_travel("Punch")
-	Playroom.RPC.call("punch", {}, Playroom.RPC.Mode.OTHERS)
+	var payload = { "damage": punch_damage }
+	Playroom.RPC.call("punch", JSON.print(payload), Playroom.RPC.Mode.ALL)
 	
 func _do_hook(): 
 	_travel("Hook")
-	Playroom.RPC.call("hook", {}, Playroom.RPC.Mode.OTHERS)
+	var payload = { "damage": hook_damage }
+	Playroom.RPC.call("hook", JSON.print(payload), Playroom.RPC.Mode.ALL)
 	
 func remote_apply_damage(amount:int) -> void:
 	health = max(health - amount, 0)

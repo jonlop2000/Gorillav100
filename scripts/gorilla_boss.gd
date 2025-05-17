@@ -429,6 +429,12 @@ func _apply_vertical(delta: float) -> void:
 			else:
 				_vert_vel = 0.0
 
+func apply_damage(amount:int) -> void:
+	health = max(health - amount, 0)
+	emit_signal("health_changed", health)
+	if health <= 0:
+		sm.travel("Death")
+
 
 
 func _direct_steer(dest: Vector3, delta: float) -> void:

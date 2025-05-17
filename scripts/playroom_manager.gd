@@ -103,6 +103,8 @@ func _ready():
 	Playroom.RPC.register("hook", _bridge("_on_hook"))
 	Playroom.RPC.register("roll", _bridge("_on_roll"))
 	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
+	Playroom.RPC.register("punch", _bridge("_on_punch"))
+	Playroom.RPC.register("hook",  _bridge("_on_hook"))
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
 		opts.gameId = "I2okszCMAwuMeW4fxFGD"
@@ -116,28 +118,47 @@ func _ready():
 		players["LOCAL"] = { "state": dummy_state, "node": local_node }
 		boss_node = _spawn_boss()
 
-func _on_punch(args):
-	var sender_state = args[1]           # ➊ second slot
-	if sender_state == null:
-		return
-	var sender_id = str(sender_state.id)
-
-	if players.has(sender_id):
-		var node = players[sender_id].node
+func _on_punch(args:Array) -> void:
+	# ── play the punch animation for other clients ──
+	var sender_state = null
+	if args.size() > 1:
+		sender_state = args[1]
+	if sender_state and players.has(str(sender_state.id)):
+		var node = players[str(sender_state.id)].node
 		if node and node.has_method("_travel"):
 			node._travel("Punch")
 
-func _on_hook(args):
-	var sender_state = args[1]
-	if sender_state == null:
-		return
-	var sender_id = str(sender_state.id)
+	# ── unpack & apply damage on host ──
+	if Playroom.isHost() and boss_node:
+		var raw = null
+		if args.size() > 0:
+			raw = args[0]
+		if typeof(raw) == TYPE_STRING:
+			var parsed = JSON.parse(raw)
+			if parsed.error == OK and parsed.result.has("damage"):
+				boss_node.apply_damage(int(parsed.result.damage))
+				Playroom.setState("boss", JSON.print(_pack_boss()))
 
-	if players.has(sender_id):
-		var node = players[sender_id].node
+func _on_hook(args:Array) -> void:
+	# ── play the hook animation for other clients ──
+	var sender_state = null
+	if args.size() > 1:
+		sender_state = args[1]
+	if sender_state and players.has(str(sender_state.id)):
+		var node = players[str(sender_state.id)].node
 		if node and node.has_method("_travel"):
 			node._travel("Hook")
-			
+
+	# ── unpack & apply damage on host ──
+	if Playroom.isHost() and boss_node:
+		var raw = null
+		if args.size() > 0:
+			raw = args[0]
+		if typeof(raw) == TYPE_STRING:
+			var parsed = JSON.parse(raw)
+			if parsed.error == OK and parsed.result.has("damage"):
+				boss_node.apply_damage(int(parsed.result.damage))
+				Playroom.setState("boss", JSON.print(_pack_boss()))
 
 func _on_roll(args):
 	# 1) Extract the raw JSON string
