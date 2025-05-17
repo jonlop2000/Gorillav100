@@ -250,12 +250,19 @@ func _do_hook():
 	_travel("Hook")
 	Playroom.RPC.call("hook", {}, Playroom.RPC.Mode.OTHERS)
 	
-func remote_apply_knockback(dir: Vector3, force: float) -> void:
+func remote_apply_damage(amount:int) -> void:
+	health = max(health - amount, 0)
+	emit_signal("health_changed", health)
+	if health <= 0:
+		_travel("Death")
+	else:
+		_travel("Hit")
+
+		
+func remote_apply_knockback(dir:Vector3, force:float) -> void:
 	_kb_vel   = dir * force
 	_kb_timer = 0.3
-	_recover_after_kb  = true
-	_travel("KnockBack")
-
+	_travel("Knockback")   # or "Stagger"
 
 # called only by the manager when someone else rolls
 # called by PlayroomManager when a roll RPC arrives
