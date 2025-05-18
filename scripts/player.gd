@@ -10,7 +10,7 @@ export var move_speed : float = 10.0
 export var jump_speed : float = 10.0
 export var gravity : float = -28.0
 export var mouse_sensitivity : float = 0.002
-export var roll_speed : float = 18.0
+export var roll_speed : float = 14.0
 export var roll_time : float = 0.8
 export(int) var max_health := 100
 export(int) var punch_damage = 10
@@ -30,6 +30,7 @@ var _recover_after_kb: bool = false
 var _remote_roll_start : Vector3
 var _remote_roll_end   : Vector3
 var _remote_roll_elapsed : float = 0.0
+var _recover_after_roll    = false
 
 # ────────────────────────────────────────────────────────────────────
 #  Public flags set by PlayroomManager
@@ -109,6 +110,20 @@ func _input(event):
 #  Main loop
 # ────────────────────────────────────────────────────────────────────
 func _physics_process(delta):
+	# —— ROLL OVERRIDE ——
+	if _roll_timer > 0.0:
+		_roll_timer -= delta
+
+		# full, deterministic roll movement
+		var v = _roll_dir * roll_speed
+		v.y += gravity * delta
+		_velocity = move_and_slide(v, Vector3.UP)
+
+		# once it finishes, zero out and flag recovery if needed
+		if _roll_timer <= 0.0:
+			_velocity = Vector3.ZERO
+			_recover_after_roll = true
+		return    # skip the rest of _physics_process while rolling
 	# —— KNOCKBACK OVERRIDE ——
 	if _kb_timer > 0.0:
 		_kb_timer -= delta
@@ -122,10 +137,7 @@ func _physics_process(delta):
 	if is_local:
 		_local_movement(delta)
 	else:
-		if _remote_roll_timer > 0.0:
-			_simulate_remote_roll(delta)
-		else:
-			_calc_remote_velocity(delta)
+		_calc_remote_velocity(delta)
 
 	_update_animation(delta)
 
@@ -176,9 +188,6 @@ func _local_movement(delta):
 
 	# ───── 2. NEW single‑key actions (they take precedence over movement) ─────
 	if Input.is_action_just_pressed("roll"):
-		_roll_dir = global_transform.basis.z       # forward
-		_roll_timer = roll_time
-		_travel("StandToRoll")
 		var payload = {
 			"dir": [_roll_dir.x, _roll_dir.y, _roll_dir.z],
 			"t":   OS.get_ticks_msec(),
@@ -190,6 +199,7 @@ func _local_movement(delta):
 		}
 		var raw = JSON.print(payload)
 		Playroom.RPC.call("roll", raw, Playroom.RPC.Mode.OTHERS)
+		_begin_roll(payload)
 		return
 	if Input.is_action_just_pressed("punch"):
 		_do_punch()        
@@ -271,45 +281,21 @@ func remote_apply_knockback(dir:Vector3, force:float) -> void:
 	_kb_timer = 0.3
 	_travel("Knockback")   # or "Stagger"
 
-# called by PlayroomManager when a roll RPC arrives
-func _start_remote_roll(data: Dictionary) -> void:
-	if not (data.has("dir") and data.has("t") and data.has("pos")):
-		return
 
-	var dir_arr = data["dir"]
-	_remote_roll_dir = Vector3(dir_arr[0],dir_arr[1],dir_arr[2]).normalized()
+func _begin_roll(data: Dictionary) -> void:
+	# 4a) snap to the exact position the roller saw
+	var p = data.pos
+	global_transform.origin = Vector3(p[0], p[1], p[2])
 
-	var sent_ms = float(data["t"])
-	var elapsed = clamp((OS.get_ticks_msec() - sent_ms)/1000.0, 0.0, roll_time)
+	# 4b) set up your timer + direction
+	var a = data.dir
+	_roll_dir = Vector3(a[0], a[1], a[2])
+	_roll_timer = roll_time
 
-	# host's exact start
-	var p_arr = data["pos"]
-	_remote_roll_start = Vector3(p_arr[0], p_arr[1], p_arr[2])
-	_remote_roll_end   = _remote_roll_start + _remote_roll_dir * roll_speed * roll_time
-
-	# compute remaining & force one frame
-	var remain = roll_time - elapsed
-	var min_step = get_physics_process_delta_time()
-	_remote_roll_timer   = max(remain, min_step)
-	_remote_roll_elapsed = elapsed
-
-	# immediately snap to the proper fraction
-	var alpha = _remote_roll_elapsed / roll_time
-	global_transform.origin = _remote_roll_start.linear_interpolate(_remote_roll_end, alpha)
-
+	# 4c) trigger your anim state
 	_travel("StandToRoll")
-
-
-func _simulate_remote_roll(delta: float) -> void:
-	if _remote_roll_timer <= 0.0:
-		return
-
-	_remote_roll_timer   -= delta
-	_remote_roll_elapsed = min(_remote_roll_elapsed + delta, roll_time)
-
-	var alpha = _remote_roll_elapsed / roll_time
-	global_transform.origin = _remote_roll_start.linear_interpolate(_remote_roll_end, alpha)
-
+	
+	
 
 func is_remotely_rolling() -> bool:
 	return _remote_roll_timer > 0.0

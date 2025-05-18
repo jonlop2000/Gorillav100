@@ -161,30 +161,9 @@ func _on_hook(args:Array) -> void:
 				Playroom.setState("boss", JSON.print(_pack_boss()))
 
 func _on_roll(args):
-	# 1) Extract the raw JSON string
-	var raw = args[0]
-	if typeof(raw) != TYPE_STRING:
-		push_error("Expected roll RPC payload as String, got %s" % typeof(raw))
-		return
-	# 2) Parse it back into a Dictionary
-	var parsed = JSON.parse(raw)
-	if parsed.error != OK:
-		push_error("Failed to parse roll JSON: %s" % parsed.error_string)
-		return
-	var data = parsed.result
-	# 3) Grab the sender_state safely
-	var sender_state = null
-	if args.size() > 1:
-		sender_state = args[1]
-	if sender_state == null:
-		return
-	# 4) Find the player node and invoke the roll
-	var id = str(sender_state.id)
-	if players.has(id):
-		var node = players[id].node
-		if node and node.has_method("_start_remote_roll"):
-			node._start_remote_roll(data)
-			
+	var data = JSON.parse(args[0]).result
+	var node = players[str(data.id)].node
+	node._begin_roll(data)
 	
 func _on_apply_attack(args:Array) -> void:
 	print("<<< apply_attack RPC received, args:", args)
@@ -292,24 +271,25 @@ func _physics_process(delta):
 				var node  = entry.node
 				var state = entry.state
 
+				# 1) publish your own state
 				if node.is_local:
-					# ← throttle your own snapshot
-					var packed = _pack_player(node)  # returns {px,py,pz,rot}
+					var packed = _pack_player(node)  # {px,py,pz,rot}
 					for k in packed.keys():
 						state.setState(k, packed[k])
-				else:
-					# ← consume remote snapshots
-					var px  = state.getState("px")  if state.getState("px")  else node.global_transform.origin.x
-					var py  = state.getState("py")  if state.getState("py")  else node.global_transform.origin.y
-					var pz  = state.getState("pz")  if state.getState("pz")  else node.global_transform.origin.z
-					var rot = state.getState("rot") if state.getState("rot") else node.rotation.y
+					continue
+				
+				# 3) otherwise consume snapshots
+				var px  = state.getState("px")  if state.getState("px")  else node.global_transform.origin.x
+				var py  = state.getState("py")  if state.getState("py")  else node.global_transform.origin.y
+				var pz  = state.getState("pz")  if state.getState("pz")  else node.global_transform.origin.z
+				var rot = state.getState("rot") if state.getState("rot") else node.rotation.y
 
-					var target = Vector3(px, py, pz)
-					if node.global_transform.origin.distance_to(target) > 2.5:
-						node.global_transform.origin = target
-					else:
-						node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
-					node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
+				var target = Vector3(px, py, pz)
+				if node.global_transform.origin.distance_to(target) > 2.5:
+					node.global_transform.origin = target
+				else:
+					node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
+				node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
 
 		# ─── HOST: publish boss state ────────────────────────────────────
 		if boss_node:
@@ -318,7 +298,7 @@ func _physics_process(delta):
 				_accum_boss -= BOSS_SEND_RATE
 				Playroom.setState("boss", JSON.print(_pack_boss()))
 
-	# ─── CLIENTS: poll & interpolate transforms ────────────────────────
+	# ─── CLIENTS: poll, publish & interpolate transforms ───────────────
 	else:
 		_accum_player += delta
 		if _accum_player >= PLAYER_SEND_RATE:
@@ -330,10 +310,15 @@ func _physics_process(delta):
 				var state = entry.state
 				if not node:
 					continue
-				if node.has_method("is_remotely_rolling") and node.is_remotely_rolling():
+
+				# 1) publish your own state on clients, too!
+				if node.is_local:
+					var packed = _pack_player(node)
+					for k in packed.keys():
+						state.setState(k, packed[k])
 					continue
 
-				# Read per-axis keys
+				# 3) otherwise consume snapshots
 				var px  = state.getState("px")  if state.getState("px")  else node.global_transform.origin.x
 				var py  = state.getState("py")  if state.getState("py")  else node.global_transform.origin.y
 				var pz  = state.getState("pz")  if state.getState("pz")  else node.global_transform.origin.z
@@ -361,6 +346,7 @@ func _physics_process(delta):
 					"hp":    dict["hp"],
 					"anim":  dict["anim"]
 				})
+
 
 # ---------------------------------------------------------------------#
 #  Boss update helpers                                                 #
