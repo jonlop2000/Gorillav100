@@ -27,6 +27,9 @@ var _send_timer := 0.0
 var _kb_vel: Vector3 = Vector3.ZERO
 var _kb_timer: float = 0.0
 var _recover_after_kb: bool = false
+var _remote_roll_start : Vector3
+var _remote_roll_end   : Vector3
+var _remote_roll_elapsed : float = 0.0
 
 # ────────────────────────────────────────────────────────────────────
 #  Public flags set by PlayroomManager
@@ -177,12 +180,15 @@ func _local_movement(delta):
 		_roll_timer = roll_time
 		_travel("StandToRoll")
 		var payload = {
-				"dir": [_roll_dir.x, _roll_dir.y, _roll_dir.z],
-				"t":   OS.get_ticks_msec()
-			}
-			# stringify it
+			"dir": [_roll_dir.x, _roll_dir.y, _roll_dir.z],
+			"t":   OS.get_ticks_msec(),
+			"pos": [
+				global_transform.origin.x,
+				global_transform.origin.y,
+				global_transform.origin.z
+			]
+		}
 		var raw = JSON.print(payload)
-			# send that string
 		Playroom.RPC.call("roll", raw, Playroom.RPC.Mode.OTHERS)
 		return
 	if Input.is_action_just_pressed("punch"):
@@ -233,18 +239,6 @@ func _calc_remote_velocity(delta):
 	_smoothed_speed = lerp(_smoothed_speed, raw_speed, delta * 10.0)
 	
 # ────────────────────────────────────────────────────────────────────
-#  Rolling Coroutine
-# ────────────────────────────────────────────────────────────────────
-func _handle_roll(delta):
-	_roll_timer -= delta
-	# just move you forward while rolling
-	var fwd = global_transform.basis.z
-	_velocity = fwd * roll_speed
-	_velocity.y += gravity * delta
-	_velocity = move_and_slide(_velocity, Vector3.UP)
-
-
-# ────────────────────────────────────────────────────────────────────
 #  Animation via AnimationTree StateMachine
 # ────────────────────────────────────────────────────────────────────
 func _travel(state_name : String) -> void:
@@ -277,50 +271,45 @@ func remote_apply_knockback(dir:Vector3, force:float) -> void:
 	_kb_timer = 0.3
 	_travel("Knockback")   # or "Stagger"
 
-# called only by the manager when someone else rolls
 # called by PlayroomManager when a roll RPC arrives
 func _start_remote_roll(data: Dictionary) -> void:
-	if not data.has("dir") or not data.has("t"):
+	if not (data.has("dir") and data.has("t") and data.has("pos")):
 		return
-	# extract direction and elapsed time
-	var dir_array = data["dir"]             # [x,y,z]
-	_remote_roll_dir = Vector3(dir_array[0], dir_array[1], dir_array[2]).normalized()
+
+	var dir_arr = data["dir"]
+	_remote_roll_dir = Vector3(dir_arr[0],dir_arr[1],dir_arr[2]).normalized()
+
 	var sent_ms = float(data["t"])
-	var elapsed = clamp((OS.get_ticks_msec() - sent_ms) / 1000.0, 0.0, roll_time)
-	# 1) always predict the full duration
-	_remote_roll_timer = roll_time
-	# 2) store how much of the roll we should skip past
-	_roll_elapsed_bias = elapsed
-	# 3) advance the position immediately to match host up to 'elapsed'
-	#    so that when we start simulating, we're in the right spot.
-#	var bias_distance = roll_speed * elapsed
-#	global_transform.origin += _remote_roll_dir * bias_distance
-#	_prev_pos = global_transform.origin
+	var elapsed = clamp((OS.get_ticks_msec() - sent_ms)/1000.0, 0.0, roll_time)
 
-	# 4) switch animation/state into rolling
-	_travel("StandToRoll")   # or whatever your state machine uses
+	# host's exact start
+	var p_arr = data["pos"]
+	_remote_roll_start = Vector3(p_arr[0], p_arr[1], p_arr[2])
+	_remote_roll_end   = _remote_roll_start + _remote_roll_dir * roll_speed * roll_time
 
-# called every physics frame to simulate the remote roll
+	# compute remaining & force one frame
+	var remain = roll_time - elapsed
+	var min_step = get_physics_process_delta_time()
+	_remote_roll_timer   = max(remain, min_step)
+	_remote_roll_elapsed = elapsed
+
+	# immediately snap to the proper fraction
+	var alpha = _remote_roll_elapsed / roll_time
+	global_transform.origin = _remote_roll_start.linear_interpolate(_remote_roll_end, alpha)
+
+	_travel("StandToRoll")
+
+
 func _simulate_remote_roll(delta: float) -> void:
 	if _remote_roll_timer <= 0.0:
 		return
-	# decrement timer
-	_remote_roll_timer -= delta
 
-	# compute how far we'd move this frame
-	var frame_distance = roll_speed * delta
-	# if we still have bias to consume, subtract it from this frame
-	if _roll_elapsed_bias > 0.0:
-		var bias_consumed = min(_roll_elapsed_bias, frame_distance)
-		_roll_elapsed_bias -= bias_consumed
-		frame_distance -= bias_consumed
-	# after bias is gone, frame_distance is the "new" movement
-	# move directly without physics collisions
-	global_translate(_remote_roll_dir * frame_distance)
-	# optional: you can still apply simple gravity if you need vertical arc
-	# velocity.y += gravity * delta
-	# global_translate(Vector3(0, velocity.y * delta, 0))
-	_prev_pos = global_transform.origin
+	_remote_roll_timer   -= delta
+	_remote_roll_elapsed = min(_remote_roll_elapsed + delta, roll_time)
+
+	var alpha = _remote_roll_elapsed / roll_time
+	global_transform.origin = _remote_roll_start.linear_interpolate(_remote_roll_end, alpha)
+
 
 func is_remotely_rolling() -> bool:
 	return _remote_roll_timer > 0.0
