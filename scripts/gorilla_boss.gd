@@ -4,13 +4,15 @@
 extends KinematicBody
 
 ## ───────────────  Tunables  ─────────────── ##
-enum State { IDLE, CHASE, ATTACK, RECOVER, DESPERATION }
+enum State { IDLE, CHASE, ATTACK, RECOVER, DESPERATION, JUMP, FALL }
 
 export(int)   var max_health := 2000
 export(float) var move_speed := 2.0
-export(float) var attack_range := 2.0
+export(float) var attack_range := 1.6
 export(float) var rotation_speed := 5.0
-
+export(float) var jump_speed = 12.0
+export(float) var jump_height_threshold = 1.5 
+export(float) var gravity = 9.8
 ## ───────────────  Runtime  ─────────────── ##
 
 var Playroom = JavaScript.get_interface("Playroom")
@@ -25,7 +27,13 @@ var _nav_map : RID
 var _target_pos   : Vector3
 var _target_rot_y : float
 var _last_used = {}
-
+var _vert_vel: float = 0.0 
+var _velocity: Vector3 = Vector3.ZERO
+var _airborne: bool = false
+var _grounded : bool = false
+var _attack_active := false
+var _hit_targets := []        # list of player IDs already hit this attack
+var _current_move := ""       # name of the move we’re in the middle of
 
 ##  AnimationTree shortcuts
 onready var anim_tree : AnimationTree  = $visual/GorillaBossGD/AnimationTree
@@ -36,17 +44,18 @@ onready var anim_player : AnimationPlayer = $visual/GorillaBossGD/AnimationPlaye
 onready var nav_agent : NavigationAgent = $NavigationAgent
 onready var hit_area = $visual/GorillaBossGD/Armature/Skeleton/BoneAttachment/HitArea
 onready var hp_bar = $HealthViewport/UIRoot/Healthbar
+onready var ground_ray = $RayCast
 
 ##  Signals  (manager listens to these)
 signal anim_changed(anim_name)
 signal health_changed(hp)
 
 var moves = {
-	"Melee": {"range":1.0, "cooldown":1.0,  "weight":3,   "func":"_do_melee"},
-	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":2,   "func":"_do_combo"},
-	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1,   "func":"_do_swing"},
-	"BattleCry": {"range":3.0, "cooldown":2.0, "weight":0.5, "func":"_do_battlecry"},
-	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1,   "func":"_do_despair_combo", "desperation_only":true}
+	"Melee": {"range":1.0, "cooldown":1.0,  "weight":4, "knockback": 3.0, "damage":8, "func":"_do_melee"},
+	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":2, "knockback": 3.0, "damage":15, "func":"_do_combo"},
+	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1, "knockback": 10.0, "damage":20, "func":"_do_swing"},
+	"BattleCry": {"range":3.0, "cooldown":2.0, "weight":0.5, "knockback": 10.0, "damage":5, "func":"_do_battlecry"},
+	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0, "damage":20,  "func":"_do_despair_combo", "desperation_only":true}
 }
 
 ## ───────────────  Setup  ─────────────── ##
@@ -61,12 +70,10 @@ func _ready():
 	for name in moves.keys():
 		_last_used[name] = -INF
 	_nav_map = get_world().get_navigation_map()
-	if _nav_map == RID():
-		push_error("⚠️ Failed to grab navigation map RID!")
-	else:
-		print("✅ Navigation map RID is", _nav_map)
 
-	hit_area.monitoring = false
+	hit_area.monitoring = true
+	hit_area.connect("body_entered", self, "_on_hit_area_body_entered")
+	hit_area.connect("body_exited", self, "_on_hit_area_body_exited")
 	if not is_in_group("boss"):
 		add_to_group("boss")
 
@@ -96,9 +103,79 @@ func apply_remote_state(d : Dictionary) -> void:
 func _ensure_anim(name : String) -> void:
 	if sm.get_current_node() != name:
 		sm.travel(name)
+		
+
+# ─────────── helper method ───────────
+# ─── signal callbacks ───
+func _on_hit_area_body_entered(body):
+	if not _attack_active or not body.is_in_group("players"):
+		return
+
+	var target_id = body.name.replace("player_","")
+	if target_id in _hit_targets:
+		print("   already hit, skipping")
+		return
+	_hit_targets.append(target_id)
+	_broadcast_attack_to_target(_current_move, body)
+
+
+func _on_hit_area_body_exited(body):
+	if body.is_in_group("players"):
+		print("Boss: player exited hit area: ", body.name)
+
+# ─── at the top of GorillaBoss.gd ───
+func _broadcast_attack_to_target(move_name:String, body:Node) -> void:
+	if not is_host:
+		return
+	print("--> Broadcasting attack:", move_name, "to", body.name)
+	var m = moves.get(move_name)
+	if m == null:
+		push_error("Unknown move for attack broadcast: %s" % move_name)
+		return
+
+	var dir = (body.global_transform.origin - global_transform.origin).normalized()
+	var payload = {
+		"target_id": body.name.replace("player_",""),
+		"direction": [dir.x, dir.y, dir.z],
+		"force":     m.knockback,
+		"damage":    m.damage
+	}
+	print("    payload:", payload)
+	Playroom.RPC.call(
+		"apply_attack",
+		JSON.print(payload),
+		Playroom.RPC.Mode.ALL
+	)
+
+
+func _broadcast_attack(move_name:String) -> void:
+	if not is_host:
+		return
+	var m = moves.get(move_name)
+	if m == null:
+		push_error("Unknown move: %s" % move_name)
+		return
+
+	var targets = []
+	if move_name in ["Melee","MeleeCombo","360Swing"]:
+		# melee‐style: use your hit_area overlaps
+		for body in hit_area.get_overlapping_bodies():
+			if body.is_in_group("players"):
+				targets.append(body)
+	else:
+		# AOE moves: range check
+		for p in get_tree().get_nodes_in_group("players"):
+			if global_transform.origin.distance_to(p.global_transform.origin) <= m.range:
+				targets.append(p)
+
+	for body in targets:
+		_broadcast_attack_to_target(move_name, body)
+
+		
 
 ## ───────────────  Host‑only physics / AI  ─────────────── ##
 func _physics_process(delta):
+	_grounded = ground_ray.is_colliding()
 	if is_host:
 		_state_machine(delta)
 		_update_hp_bar()
@@ -137,6 +214,16 @@ func _state_machine(delta):
 		State.CHASE:
 			if in_range:
 				_enter_state(State.ATTACK)
+			else:
+				var dy = target.global_transform.origin.y - global_transform.origin.y
+				if _grounded and dy > jump_height_threshold:
+					_enter_state(State.JUMP)
+
+		State.JUMP:
+			if not _airborne and not _grounded:
+				_airborne = true
+			elif _airborne and _grounded:
+				_enter_state(State.CHASE)
 
 		State.ATTACK:
 			if not in_range:
@@ -154,24 +241,40 @@ func _state_machine(delta):
 	# Movement only in CHASE
 	if state == State.CHASE and target:
 		_move_toward(target.global_transform.origin, delta)
+	
+	elif state == State.JUMP:
+		var dir = (target.global_transform.origin - global_transform.origin)
+		dir.y = 0
+		dir = dir.normalized() * move_speed
+		
+		_vert_vel -= 9.8 * delta
+		var vel = Vector3(dir.x, _vert_vel, dir.z)
+		_velocity = move_and_slide(vel, Vector3.UP)
+		return
 
 func _enter_state(new_state: int) -> void:
 	state = new_state
 	state_timer = 0.0
+	
 	match state:
-		
 		State.IDLE:
 			sm.travel("Idle")
 			emit_signal("anim_changed", "Idle")
 		State.CHASE, State.DESPERATION:
 			sm.travel("Run")
 			emit_signal("anim_changed", "Run")
+			nav_agent.set_physics_process(true)
 		State.ATTACK:
 			pass
+		State.JUMP:
+			sm.travel("Run")
+			emit_signal("anim_changed", "Run")
+			nav_agent.set_physics_process(false)
+			_vert_vel = jump_speed
+			_airborne = false
 
 func _pick_target():
 	var players = get_tree().get_nodes_in_group("players")
-	print("players in group:", players.size())
 	var best : Node = null
 	var best_d := INF
 	for p in players:
@@ -180,18 +283,11 @@ func _pick_target():
 			
 		# Skip players at origin (likely not properly initialized)
 		if p.global_transform.origin == Vector3.ZERO:
-			print("Skipping player at origin")
 			continue
 			
 		var d = global_transform.origin.distance_squared_to(p.global_transform.origin)
-		print("Player at:", p.global_transform.origin, " distance:", d)
 		if d < best_d:
 			best_d = d; best = p
-			
-	if best:
-		print("Selected target at:", best.global_transform.origin)
-	else:
-		print("No valid target found")
 	return best
 
 func _choose_attack(desperation := false) -> void:
@@ -230,100 +326,109 @@ func _choose_attack(desperation := false) -> void:
 
 
 ## ───────────────  Moves (host only)  ─────────────── ##
-func _do_melee():
-	current_attack_dmg = 20
+func _do_melee() -> void:
+	_current_move  = "Melee"
+	_attack_active = true
+	_hit_targets.clear()
 	sm.travel("Melee")
-	emit_signal("anim_changed", "Melee")
+	emit_signal("anim_changed","Melee")
 	hit_area.monitoring = true
-	yield(anim_player, "animation_finished")
-	hit_area.monitoring = false
+	yield(anim_player,"animation_finished")
+	_attack_active = false
 	state_timer = moves["Melee"].cooldown
+
 	
-func _do_combo() -> void:
-	current_attack_dmg = 25
+func _do_combo():
+	_current_move = "MeleeCombo"
+	_attack_active = true
+	_hit_targets.clear()
 	sm.travel("MeleeCombo")
 	emit_signal("anim_changed", "MeleeCombo")
 	hit_area.monitoring = true
 	yield(anim_player, "animation_finished")
-	hit_area.monitoring = false
+	_attack_active = false
 	state_timer = moves["MeleeCombo"].cooldown
 	
-func _do_swing() -> void:
-	current_attack_dmg = 15
+func _do_swing():
+	_current_move = "360Swing"
+	_attack_active = true
+	_hit_targets.clear()
 	sm.travel("360Swing")
 	emit_signal("anim_changed", "360Swing")
 	hit_area.monitoring = true
 	yield(anim_player, "animation_finished")
-	hit_area.monitoring = false
+	_attack_active = false
 	state_timer = moves["360Swing"].cooldown
-	
 
 func _do_battlecry() -> void:
-	current_attack_dmg = 0
 	sm.travel("BattleCry")
 	emit_signal("anim_changed", "BattleCry")
-
-	if is_host:
-		for p in get_tree().get_nodes_in_group("players"):
-			var d = global_transform.origin.distance_to(p.global_transform.origin)
-			if d <= moves["BattleCry"].range:
-				# build a *pure-GDScript* payload with only primitive types
-				var payload = {
-					"target_id": p.name.replace("player_", ""),
-					"direction": [
-						p.global_transform.origin.x - global_transform.origin.x,
-						p.global_transform.origin.y - global_transform.origin.y,
-						p.global_transform.origin.z - global_transform.origin.z
-					],
-					"force": 20.0
-				}
-				# stringify it
-				var raw = JSON.print(payload)
-				# call RPC with (name, string, mode)
-				Playroom.RPC.call(
-					"apply_knockback",
-					raw,
-					Playroom.RPC.Mode.ALL   
-				)
-
 	yield(anim_player, "animation_finished")
+	_broadcast_attack("BattleCry")
 	state_timer = moves["BattleCry"].cooldown
 
-
-# called when moves["HurricaneKick"].func == "_do_despair_combo"
 func _do_despair_combo() -> void:
-	current_attack_dmg = 40
-	sm.travel("HurricaneKick")      # reuse your HurricaneKick anim
+	sm.travel("HurricaneKick")
 	emit_signal("anim_changed", "HurricaneKick")
-	hit_area.monitoring = true
 	yield(anim_player, "animation_finished")
-	hit_area.monitoring = false
+	_broadcast_attack("HurricaneKick")
 	state_timer = moves["HurricaneKick"].cooldown
+
 
 ## ───────────────  Movement helpers (host) ─────────────── ##
 func _move_toward(dest: Vector3, delta: float) -> void:
 	if not is_host:
 		return
+
+	# ─── HORIZONTAL ───
 	nav_agent.set_target_location(dest)
-	# if we’ve no path or already there, bail
 	if nav_agent.is_navigation_finished():
+		# no nav target → maybe just fall?
+		_apply_vertical(delta)
 		return
 
 	var next_pt = nav_agent.get_next_location()
-	var dir     = next_pt - global_transform.origin
+	var dir     = (next_pt - global_transform.origin)
 	dir.y = 0
 	if dir.length() < 0.01:
+		# too close, only apply gravity
+		_apply_vertical(delta)
 		return
 	dir = dir.normalized()
 
-	# rotate smoothly toward dest
-	var look = dest - global_transform.origin
+	# smooth rotation toward your final DEST, not just the next_pt
+	var look = (dest - global_transform.origin)
 	look.y = 0
 	if look.length() > 0:
 		var t_rot = atan2(look.x, look.z)
 		rotation.y = lerp_angle(rotation.y, t_rot, rotation_speed * delta)
 
-	move_and_slide(dir * move_speed, Vector3.UP)
+	# ─── VERTICAL ───
+	_apply_vertical(delta)
+
+	# ─── COMBINE & MOVE ───
+	var full_vel = Vector3(dir.x * move_speed,
+						   _vert_vel,
+						   dir.z * move_speed)
+	_velocity = move_and_slide(full_vel, Vector3.UP)
+
+func _apply_vertical(delta: float) -> void:
+	match state:
+		State.JUMP:
+			_vert_vel -= gravity * delta
+		_:
+			# fall when not grounded
+			if not _grounded:
+				_vert_vel -= gravity * delta
+			else:
+				_vert_vel = 0.0
+
+func apply_damage(amount:int) -> void:
+	health = max(health - amount, 0)
+	emit_signal("health_changed", health)
+	if health <= 0:
+		sm.travel("Death")
+
 
 
 func _direct_steer(dest: Vector3, delta: float) -> void:

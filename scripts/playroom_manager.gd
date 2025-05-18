@@ -102,7 +102,9 @@ func _ready():
 	Playroom.RPC.register("punch", _bridge("_on_punch"))
 	Playroom.RPC.register("hook", _bridge("_on_hook"))
 	Playroom.RPC.register("roll", _bridge("_on_roll"))
-	Playroom.RPC.register("apply_knockback", _bridge("_on_knockback"))
+	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
+	Playroom.RPC.register("punch", _bridge("_on_punch"))
+	Playroom.RPC.register("hook",  _bridge("_on_hook"))
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
 		opts.gameId = "I2okszCMAwuMeW4fxFGD"
@@ -116,83 +118,85 @@ func _ready():
 		players["LOCAL"] = { "state": dummy_state, "node": local_node }
 		boss_node = _spawn_boss()
 
-func _on_punch(args):
-	var sender_state = args[1]           # ➊ second slot
-	if sender_state == null:
-		return
-	var sender_id = str(sender_state.id)
-
-	if players.has(sender_id):
-		var node = players[sender_id].node
-		if node and node.has_method("_travel"):
-			node._travel("Punch")
-
-func _on_hook(args):
-	var sender_state = args[1]
-	if sender_state == null:
-		return
-	var sender_id = str(sender_state.id)
-
-	if players.has(sender_id):
-		var node = players[sender_id].node
-		if node and node.has_method("_travel"):
-			node._travel("Hook")
-			
-
-func _on_roll(args):
-	# 1) Extract the raw JSON string
-	var raw = args[0]
-	if typeof(raw) != TYPE_STRING:
-		push_error("Expected roll RPC payload as String, got %s" % typeof(raw))
-		return
-	# 2) Parse it back into a Dictionary
-	var parsed = JSON.parse(raw)
-	if parsed.error != OK:
-		push_error("Failed to parse roll JSON: %s" % parsed.error_string)
-		return
-	var data = parsed.result
-	# 3) Grab the sender_state safely
+func _on_punch(args:Array) -> void:
+	# ── play the punch animation for other clients ──
 	var sender_state = null
 	if args.size() > 1:
 		sender_state = args[1]
-	if sender_state == null:
-		return
-	# 4) Find the player node and invoke the roll
-	var id = str(sender_state.id)
+	if sender_state and players.has(str(sender_state.id)):
+		var node = players[str(sender_state.id)].node
+		if node and node.has_method("_travel"):
+			node._travel("Punch")
+
+	# ── unpack & apply damage on host ──
+	if Playroom.isHost() and boss_node:
+		var raw = null
+		if args.size() > 0:
+			raw = args[0]
+		if typeof(raw) == TYPE_STRING:
+			var parsed = JSON.parse(raw)
+			if parsed.error == OK and parsed.result.has("damage"):
+				boss_node.apply_damage(int(parsed.result.damage))
+				Playroom.setState("boss", JSON.print(_pack_boss()))
+
+func _on_hook(args:Array) -> void:
+	# ── play the hook animation for other clients ──
+	var sender_state = null
+	if args.size() > 1:
+		sender_state = args[1]
+	if sender_state and players.has(str(sender_state.id)):
+		var node = players[str(sender_state.id)].node
+		if node and node.has_method("_travel"):
+			node._travel("Hook")
+
+	# ── unpack & apply damage on host ──
+	if Playroom.isHost() and boss_node:
+		var raw = null
+		if args.size() > 0:
+			raw = args[0]
+		if typeof(raw) == TYPE_STRING:
+			var parsed = JSON.parse(raw)
+			if parsed.error == OK and parsed.result.has("damage"):
+				boss_node.apply_damage(int(parsed.result.damage))
+				Playroom.setState("boss", JSON.print(_pack_boss()))
+
+func _on_roll(args):
+	var data = JSON.parse(args[0]).result
+	var id   = str(args[1].id)
 	if players.has(id):
-		var node = players[id].node
-		if node and node.has_method("_start_remote_roll"):
-			node._start_remote_roll(data)
-			
-	
-func _on_knockback(args: Array) -> void:
+		players[id].node._begin_roll(data)
+
+func _on_apply_attack(args:Array) -> void:
+	print("<<< apply_attack RPC received, args:", args)
 	if args.size() < 1:
 		return
-
 	var raw = args[0]
 	if typeof(raw) != TYPE_STRING:
-		push_error("apply_knockback RPC: expected String, got %s" % typeof(raw))
+		push_error("apply_attack RPC: expected String, got %s" % typeof(raw))
 		return
-
 	var parsed = JSON.parse(raw)
 	if parsed.error != OK:
-		push_error("apply_knockback RPC: JSON.parse error %s" % parsed.error_string)
+		push_error("apply_attack RPC: JSON.parse error %s" % parsed.error_string)
 		return
+	var data = parsed.result
 
-	var data = parsed.result   # now a Dictionary
 	var target_id = str(data.get("target_id",""))
 	if not players.has(target_id):
 		return
-
-	var dir_arr = data.get("direction", [])
-	if dir_arr.size() != 3:
-		return
-
-	var dir   = Vector3(dir_arr[0], dir_arr[1], dir_arr[2])
-	var force = float(data.get("force", 0.0))
-
 	var player_node = players[target_id].node
-	player_node.remote_apply_knockback(dir, force)
+
+	# apply knockback
+	var dir_arr = data.get("direction", [])
+	if dir_arr.size() == 3:
+		var dir = Vector3(dir_arr[0], dir_arr[1], dir_arr[2]).normalized()
+		player_node.remote_apply_knockback(dir, float(data.get("force",0)))
+
+	# apply damage
+	var dmg = int(data.get("damage", 0))
+	if dmg > 0 and player_node.has_method("remote_apply_damage"):
+		player_node.remote_apply_damage(dmg)
+	print("applying knockback & damage to:", target_id)
+
 
 # ---------------------------------------------------------------------#
 #  Lobby / join / quit                                                 #
@@ -253,78 +257,85 @@ func _push_room_init_snapshot():
 #  Main loops                                                          #
 # ---------------------------------------------------------------------#
 func _physics_process(delta):
+	# ─ Only run in Playroom (HTML5) context ───────────────────────────
 	if not OS.has_feature("HTML5"):
 		return
 
-	# --------------------------------------------------------------#
-	#  HOST: publish authoritative transforms                       #
-	# --------------------------------------------------------------#
+	# ─── HOST: throttle & publish authoritative transforms ─────────────
 	if Playroom.isHost():
 		_accum_player += delta
 		if _accum_player >= PLAYER_SEND_RATE:
-			_accum_player = 0.0
-			for id in players.keys():
-				var node  = players[id].node
-				var state = players[id].state
+			_accum_player -= PLAYER_SEND_RATE
 
+			for id in players.keys():
+				var entry = players[id]
+				var node  = entry.node
+				var state = entry.state
+
+				# 1) publish your own state
 				if node.is_local:
-					# ← host publishes only its own snapshot
-					var packed = _pack_player(node)
+					var packed = _pack_player(node)  # {px,py,pz,rot}
 					for k in packed.keys():
 						state.setState(k, packed[k])
+					continue
+				
+				# 3) otherwise consume snapshots
+				var px  = state.getState("px")  if state.getState("px")  else node.global_transform.origin.x
+				var py  = state.getState("py")  if state.getState("py")  else node.global_transform.origin.y
+				var pz  = state.getState("pz")  if state.getState("pz")  else node.global_transform.origin.z
+				var rot = state.getState("rot") if state.getState("rot") else node.rotation.y
+
+				var target = Vector3(px, py, pz)
+				if node.global_transform.origin.distance_to(target) > 2.5:
+					node.global_transform.origin = target
 				else:
-					# ← host *consumes* snapshots from remote players
-					var px  = state.getState("px")  if state.getState("px")  else node.global_transform.origin.x
-					var py  = state.getState("py")  if state.getState("py")  else node.global_transform.origin.y
-					var pz  = state.getState("pz")  if state.getState("pz")  else node.global_transform.origin.z
-					var rot = state.getState("rot") if state.getState("rot") else node.rotation.y
+					node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
+				node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
 
-					var target = Vector3(px, py, pz)
-					if node.global_transform.origin.distance_to(target) > 2.5:
-						node.global_transform.origin = target
-					else:
-						node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
-					node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
-
-		# boss state
+		# ─── HOST: publish boss state ────────────────────────────────────
 		if boss_node:
 			_accum_boss += delta
 			if _accum_boss >= BOSS_SEND_RATE:
-				_accum_boss = 0.0
+				_accum_boss -= BOSS_SEND_RATE
 				Playroom.setState("boss", JSON.print(_pack_boss()))
 
-	# --------------------------------------------------------------#
-	#  CLIENTS: read host transforms                                #
-	# --------------------------------------------------------------#
+	# ─── CLIENTS: poll, publish & interpolate transforms ───────────────
 	else:
-		# players (simple lerp)
-		for id in players.keys():
-			var entry = players[id]
-			var s  = entry.state
-			var node  = entry.node
-			if not node: 
-				continue
-			if node.has_method("is_remotely_rolling") and node.is_remotely_rolling():
-				continue
+		_accum_player += delta
+		if _accum_player >= PLAYER_SEND_RATE:
+			_accum_player -= PLAYER_SEND_RATE
 
-			var x = s.getState("px") if s.getState("px") else node.global_transform.origin.x
-			var y = s.getState("py") if s.getState("py") else node.global_transform.origin.y
-			var z = s.getState("pz") if s.getState("pz") else node.global_transform.origin.z
-			var rot = s.getState("rot") if s.getState("rot") else node.rotation.y
+			for id in players.keys():
+				var entry = players[id]
+				var node  = entry.node
+				var state = entry.state
+				if not node:
+					continue
 
-			var target = Vector3(x,y,z)
-			if node.global_transform.origin.distance_to(target) > 2.5:
-				node.global_transform.origin = target
-			else:
-				node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
-			node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
-			
-		# ───────────────────────────────────────────────────
-		# CLIENTS: poll boss state at BOSS_SEND_RATE and apply
-		# ───────────────────────────────────────────────────
+				# 1) publish your own state on clients, too!
+				if node.is_local:
+					var packed = _pack_player(node)
+					for k in packed.keys():
+						state.setState(k, packed[k])
+					continue
+
+				# 3) otherwise consume snapshots
+				var px  = state.getState("px")  if state.getState("px")  else node.global_transform.origin.x
+				var py  = state.getState("py")  if state.getState("py")  else node.global_transform.origin.y
+				var pz  = state.getState("pz")  if state.getState("pz")  else node.global_transform.origin.z
+				var rot = state.getState("rot") if state.getState("rot") else node.rotation.y
+
+				var target = Vector3(px, py, pz)
+				if node.global_transform.origin.distance_to(target) > 2.5:
+					node.global_transform.origin = target
+				else:
+					node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
+				node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
+
+		# ─── CLIENTS: poll & apply boss state ────────────────────────────
 		_accum_boss += delta
 		if _accum_boss >= BOSS_SEND_RATE:
-			_accum_boss = 0.0
+			_accum_boss -= BOSS_SEND_RATE
 			var raw = Playroom.getState("boss")
 			if raw:
 				var dict = JSON.parse(raw).result
@@ -332,10 +343,11 @@ func _physics_process(delta):
 					boss_node = _spawn_boss()
 				boss_node.apply_remote_state({
 					"pos":  [dict["px"], dict["py"], dict["pz"]],
-					"rot":  dict["rot"],
-					"hp":   dict["hp"],
-					"anim": dict["anim"]
+					"rot":   dict["rot"],
+					"hp":    dict["hp"],
+					"anim":  dict["anim"]
 				})
+
 
 # ---------------------------------------------------------------------#
 #  Boss update helpers                                                 #
