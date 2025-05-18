@@ -31,6 +31,7 @@ var _remote_roll_start : Vector3
 var _remote_roll_end   : Vector3
 var _remote_roll_elapsed : float = 0.0
 var _recover_after_roll    = false
+var _jump_buffered := false
 
 # ────────────────────────────────────────────────────────────────────
 #  Public flags set by PlayroomManager
@@ -89,6 +90,8 @@ func make_remote():
 func _input(event):
 	if not is_local:
 		return
+	if event.is_action_pressed("jump"):
+		_jump_buffered = true
 	# ── 1. If the mouse is *not* captured, grab it on the next click ──
 	if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
 		if event is InputEventMouseButton and event.pressed:
@@ -221,12 +224,13 @@ func _local_movement(delta):
 		_velocity.x = lerp(_velocity.x, 0, 0.2)
 		_velocity.z = lerp(_velocity.z, 0, 0.2)
 
-	# gravity / jump
-	if is_on_floor():
-		if Input.is_action_just_pressed("jump"):
-			_velocity.y = jump_speed
-	else:
-		_velocity.y += gravity * delta
+	# Always apply gravity
+	_velocity.y += gravity * delta
+
+	# If the player tapped jump while in the air, queue it
+	if _jump_buffered and is_on_floor():
+		_velocity.y = jump_speed
+		_jump_buffered = false
 
 	# move & update smoothed speed
 	_velocity = move_and_slide(_velocity, Vector3.UP)
