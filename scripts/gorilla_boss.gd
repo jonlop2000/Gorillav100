@@ -136,6 +136,7 @@ func _broadcast_attack_to_target(move_name:String, body:Node) -> void:
 	var dir = (body.global_transform.origin - global_transform.origin).normalized()
 	var payload = {
 		"target_id": body.name.replace("player_",""),
+		"attack_name": move_name,
 		"direction": [dir.x, dir.y, dir.z],
 		"force":     m.knockback,
 		"damage":    m.damage

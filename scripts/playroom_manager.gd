@@ -179,24 +179,26 @@ func _on_apply_attack(args:Array) -> void:
 		push_error("apply_attack RPC: JSON.parse error %s" % parsed.error_string)
 		return
 	var data = parsed.result
-
-	var target_id = str(data.get("target_id",""))
+	# 1) grab the target player node
+	var target_id = str(data.get("target_id", ""))
 	if not players.has(target_id):
 		return
 	var player_node = players[target_id].node
-
-	# apply knockback
+	# 2) pick which animation to play
+	var attack_name = data.get("attack_name", "")
+	print("→ attack_name =", attack_name)
+	var anim = "KnockBack"
+	if attack_name == "Melee" or attack_name == "MeleeCombo" or attack_name == "BattleCry":
+		anim = "Hit"
+	# 3) apply the knockback (with chosen anim)
 	var dir_arr = data.get("direction", [])
 	if dir_arr.size() == 3:
 		var dir = Vector3(dir_arr[0], dir_arr[1], dir_arr[2]).normalized()
-		player_node.remote_apply_knockback(dir, float(data.get("force",0)))
-
-	# apply damage
+		player_node.remote_apply_knockback(dir, float(data.get("force", 0)), anim)
+	# 4) apply the damage (no animation here)
 	var dmg = int(data.get("damage", 0))
-	if dmg > 0 and player_node.has_method("remote_apply_damage"):
+	if dmg > 0:
 		player_node.remote_apply_damage(dmg)
-	print("applying knockback & damage to:", target_id)
-
 
 # ---------------------------------------------------------------------#
 #  Lobby / join / quit                                                 #

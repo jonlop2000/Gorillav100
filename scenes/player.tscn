@@ -2983,12 +2983,12 @@ states/StandToRoll/node = SubResource( 100 )
 states/StandToRoll/position = Vector2( -782.323, -919 )
 transitions = [ "Idle", "JogFwd", SubResource( 86 ), "JogFwd", "Idle", SubResource( 87 ), "Punch", "Idle", SubResource( 90 ), "Idle", "Punch", SubResource( 91 ), "Hook", "Idle", SubResource( 92 ), "Idle", "Hook", SubResource( 93 ), "Hook", "JogFwd", SubResource( 94 ), "JogFwd", "Hook", SubResource( 95 ), "Punch", "JogFwd", SubResource( 96 ), "JogFwd", "Punch", SubResource( 97 ), "StandToRoll", "Idle", SubResource( 101 ), "Idle", "StandToRoll", SubResource( 102 ), "Jump", "Idle", SubResource( 103 ), "Idle", "Jump", SubResource( 104 ), "StandToRoll", "JogFwd", SubResource( 106 ), "JogFwd", "StandToRoll", SubResource( 107 ), "Jump", "JogFwd", SubResource( 108 ), "JogFwd", "Jump", SubResource( 109 ), "Hit", "Idle", SubResource( 110 ), "Idle", "Hit", SubResource( 111 ), "JogFwd", "Hit", SubResource( 112 ), "Hit", "JogFwd", SubResource( 113 ), "Idle", "Death", SubResource( 114 ), "StandToRoll", "Death", SubResource( 115 ), "Punch", "Death", SubResource( 116 ), "JogFwd", "Death", SubResource( 117 ), "Hook", "Death", SubResource( 118 ), "Jump", "Death", SubResource( 119 ), "KnockBack", "Idle", SubResource( 121 ), "Idle", "KnockBack", SubResource( 122 ), "KnockBack", "JogFwd", SubResource( 123 ), "JogFwd", "KnockBack", SubResource( 124 ) ]
 start_node = "Idle"
-graph_offset = Vector2( -597.323, -694 )
+graph_offset = Vector2( -548.323, -829 )
 
 [sub_resource type="AnimationNodeTimeScale" id=82]
 
 [sub_resource type="AnimationNodeBlendTree" id=83]
-graph_offset = Vector2( -409.602, 26.5467 )
+graph_offset = Vector2( -344, 91 )
 nodes/StateMachine/node = SubResource( 81 )
 nodes/StateMachine/position = Vector2( -260, 80 )
 nodes/TS/node = SubResource( 82 )
@@ -3067,7 +3067,7 @@ bones/10/name = "mixamorig_LeftHand"
 bones/10/parent = 9
 bones/10/rest = Transform( 0.996576, 0.0821864, 0.00906671, -0.082685, 0.990566, 0.109279, 9.63919e-08, -0.109655, 0.99397, -2.28733e-06, 44.3176, -6.19516e-06 )
 bones/10/enabled = true
-bones/10/bound_children = [  ]
+bones/10/bound_children = [ NodePath("BoneAttachment") ]
 bones/11/name = "mixamorig_LeftHandIndex1"
 bones/11/parent = 10
 bones/11/rest = Transform( 0.999294, -0.0368831, 0.00717026, 0.0375736, 0.980929, -0.190697, -1.49012e-08, 0.190832, 0.981623, -1.43051e-06, 16.9645, -3.80725e-06 )
@@ -3184,7 +3184,7 @@ mesh = SubResource( 14 )
 skin = SubResource( 2 )
 
 [node name="BoneAttachment" type="BoneAttachment" parent="visuals/Soldier/Armature/Skeleton"]
-transform = Transform( 0.426985, -0.660944, -0.617121, 0.736278, 0.65031, -0.187064, 0.524959, -0.374499, 0.76431, 14.1421, 100.309, -138.108 )
+transform = Transform( 0.451074, -0.680445, -0.577519, 0.659439, 0.690138, -0.29808, 0.601394, -0.246383, 0.760014, 14.0208, 93.5273, -129.459 )
 bone_name = "mixamorig_LeftHand"
 
 [node name="HitArea" type="Area" parent="visuals/Soldier/Armature/Skeleton/BoneAttachment"]

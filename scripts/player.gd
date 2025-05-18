@@ -270,14 +270,12 @@ func remote_apply_damage(amount:int) -> void:
 	emit_signal("health_changed", health)
 	if health <= 0:
 		_travel("Death")
-	else:
-		_travel("Hit")
+	# no more _travel("Hit") here
 
-		
-func remote_apply_knockback(dir:Vector3, force:float) -> void:
+func remote_apply_knockback(dir:Vector3, force:float, anim:String="KnockBack") -> void:
 	_kb_vel   = dir * force
 	_kb_timer = 0.3
-	_travel("Knockback")   # or "Stagger"
+	_travel(anim)      # now uses whatever anim you passed in
 
 
 func _begin_roll(data: Dictionary) -> void:
