@@ -23,7 +23,7 @@ var _current_anim : String = ""
 var _smoothed_speed : float = 0.0      # shared by both local & remote
 var _current_state : String = ""
 var health := max_health
-
+var _send_timer := 0.0
 var _kb_vel: Vector3 = Vector3.ZERO
 var _kb_timer: float = 0.0
 var _recover_after_kb: bool = false
@@ -46,6 +46,7 @@ var _remote_roll_dir   := Vector3.ZERO
 var _camera_pitch    : float    = 0.0
 const _pitch_min     : float    = deg2rad(-80)
 const _pitch_max     : float    = deg2rad( 60)
+const PLAYER_SEND_RATE := 1.0 / 30.0
 
 # cache children
 onready var _camera_mount : Spatial = $camera_mount
@@ -108,29 +109,37 @@ func _physics_process(delta):
 	# —— KNOCKBACK OVERRIDE ——
 	if _kb_timer > 0.0:
 		_kb_timer -= delta
-		# apply the impulse + gravity
 		_velocity = _kb_vel + Vector3(0, -9.8 * delta, 0)
 		_velocity = move_and_slide(_velocity, Vector3.UP)
-		
 		if _kb_timer <= 0.0 and _recover_after_kb:
 			_recover_after_kb = false
-			
-		return   # skip all your normal movement & interp
+		return   # skip normal movement & interp
 
+	# Local vs Remote movement
 	if is_local:
 		_local_movement(delta)
 	else:
 		if _remote_roll_timer > 0.0:
-			_simulate_remote_roll(delta)      # simulate first, then skip lerp
+			_simulate_remote_roll(delta)
 		else:
-			_calc_remote_velocity(delta)      # normal snapshot interp
+			_calc_remote_velocity(delta)
+
 	_update_animation(delta)
+
+	# ─── Throttle & send per-axis state (non-host only) ──────────────
 	if is_local and not Playroom.isHost():
-		var my_state = Playroom.me()          # ← 1️⃣ grab *your* player object
-		my_state.setState("px", global_transform.origin.x)
-		my_state.setState("py", global_transform.origin.y)
-		my_state.setState("pz", global_transform.origin.z)
-		my_state.setState("rot", rotation.y)
+		_send_timer += delta
+		if _send_timer >= PLAYER_SEND_RATE:
+			_send_timer -= PLAYER_SEND_RATE
+
+			var me_state = Playroom.me()
+			var p        = global_transform.origin
+			var yaw      = rotation.y
+
+			me_state.setState("px",  p.x)
+			me_state.setState("py",  p.y)
+			me_state.setState("pz",  p.z)
+			me_state.setState("rot", yaw)
 
 # ────────────────────────────────────────────────────────────────────
 #  Local‑player movement & jumping

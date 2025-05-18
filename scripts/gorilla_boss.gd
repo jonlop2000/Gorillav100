@@ -108,16 +108,10 @@ func _ensure_anim(name : String) -> void:
 # ─────────── helper method ───────────
 # ─── signal callbacks ───
 func _on_hit_area_body_entered(body):
-	if body.is_in_group("players"):
-		print("yo")
-	print("> HitArea entered by:", body.name,
-		  "  attack_active=", _attack_active,
-		  "  in players?", body.is_in_group("players"))
 	if not _attack_active or not body.is_in_group("players"):
 		return
 
 	var target_id = body.name.replace("player_","")
-	print("→ valid hit on player:", target_id, " current_move=", _current_move)
 	if target_id in _hit_targets:
 		print("   already hit, skipping")
 		return

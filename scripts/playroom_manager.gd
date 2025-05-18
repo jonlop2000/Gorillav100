@@ -277,27 +277,28 @@ func _push_room_init_snapshot():
 #  Main loops                                                          #
 # ---------------------------------------------------------------------#
 func _physics_process(delta):
+	# ─ Only run in Playroom (HTML5) context ───────────────────────────
 	if not OS.has_feature("HTML5"):
 		return
 
-	# --------------------------------------------------------------#
-	#  HOST: publish authoritative transforms                       #
-	# --------------------------------------------------------------#
+	# ─── HOST: throttle & publish authoritative transforms ─────────────
 	if Playroom.isHost():
 		_accum_player += delta
 		if _accum_player >= PLAYER_SEND_RATE:
-			_accum_player = 0.0
+			_accum_player -= PLAYER_SEND_RATE
+
 			for id in players.keys():
-				var node  = players[id].node
-				var state = players[id].state
+				var entry = players[id]
+				var node  = entry.node
+				var state = entry.state
 
 				if node.is_local:
-					# ← host publishes only its own snapshot
-					var packed = _pack_player(node)
+					# ← throttle your own snapshot
+					var packed = _pack_player(node)  # returns {px,py,pz,rot}
 					for k in packed.keys():
 						state.setState(k, packed[k])
 				else:
-					# ← host *consumes* snapshots from remote players
+					# ← consume remote snapshots
 					var px  = state.getState("px")  if state.getState("px")  else node.global_transform.origin.x
 					var py  = state.getState("py")  if state.getState("py")  else node.global_transform.origin.y
 					var pz  = state.getState("pz")  if state.getState("pz")  else node.global_transform.origin.z
@@ -310,45 +311,45 @@ func _physics_process(delta):
 						node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
 					node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
 
-		# boss state
+		# ─── HOST: publish boss state ────────────────────────────────────
 		if boss_node:
 			_accum_boss += delta
 			if _accum_boss >= BOSS_SEND_RATE:
-				_accum_boss = 0.0
+				_accum_boss -= BOSS_SEND_RATE
 				Playroom.setState("boss", JSON.print(_pack_boss()))
 
-	# --------------------------------------------------------------#
-	#  CLIENTS: read host transforms                                #
-	# --------------------------------------------------------------#
+	# ─── CLIENTS: poll & interpolate transforms ────────────────────────
 	else:
-		# players (simple lerp)
-		for id in players.keys():
-			var entry = players[id]
-			var s  = entry.state
-			var node  = entry.node
-			if not node: 
-				continue
-			if node.has_method("is_remotely_rolling") and node.is_remotely_rolling():
-				continue
+		_accum_player += delta
+		if _accum_player >= PLAYER_SEND_RATE:
+			_accum_player -= PLAYER_SEND_RATE
 
-			var x = s.getState("px") if s.getState("px") else node.global_transform.origin.x
-			var y = s.getState("py") if s.getState("py") else node.global_transform.origin.y
-			var z = s.getState("pz") if s.getState("pz") else node.global_transform.origin.z
-			var rot = s.getState("rot") if s.getState("rot") else node.rotation.y
+			for id in players.keys():
+				var entry = players[id]
+				var node  = entry.node
+				var state = entry.state
+				if not node:
+					continue
+				if node.has_method("is_remotely_rolling") and node.is_remotely_rolling():
+					continue
 
-			var target = Vector3(x,y,z)
-			if node.global_transform.origin.distance_to(target) > 2.5:
-				node.global_transform.origin = target
-			else:
-				node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
-			node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
-			
-		# ───────────────────────────────────────────────────
-		# CLIENTS: poll boss state at BOSS_SEND_RATE and apply
-		# ───────────────────────────────────────────────────
+				# Read per-axis keys
+				var px  = state.getState("px")  if state.getState("px")  else node.global_transform.origin.x
+				var py  = state.getState("py")  if state.getState("py")  else node.global_transform.origin.y
+				var pz  = state.getState("pz")  if state.getState("pz")  else node.global_transform.origin.z
+				var rot = state.getState("rot") if state.getState("rot") else node.rotation.y
+
+				var target = Vector3(px, py, pz)
+				if node.global_transform.origin.distance_to(target) > 2.5:
+					node.global_transform.origin = target
+				else:
+					node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
+				node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
+
+		# ─── CLIENTS: poll & apply boss state ────────────────────────────
 		_accum_boss += delta
 		if _accum_boss >= BOSS_SEND_RATE:
-			_accum_boss = 0.0
+			_accum_boss -= BOSS_SEND_RATE
 			var raw = Playroom.getState("boss")
 			if raw:
 				var dict = JSON.parse(raw).result
@@ -356,9 +357,9 @@ func _physics_process(delta):
 					boss_node = _spawn_boss()
 				boss_node.apply_remote_state({
 					"pos":  [dict["px"], dict["py"], dict["pz"]],
-					"rot":  dict["rot"],
-					"hp":   dict["hp"],
-					"anim": dict["anim"]
+					"rot":   dict["rot"],
+					"hp":    dict["hp"],
+					"anim":  dict["anim"]
 				})
 
 # ---------------------------------------------------------------------#
