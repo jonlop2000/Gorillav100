@@ -10,7 +10,7 @@ export var move_speed : float = 10.0
 export var jump_speed : float = 10.0
 export var gravity : float = -28.0
 export var mouse_sensitivity : float = 0.002
-export var roll_speed : float = 14.0
+export var roll_speed : float = 4.0
 export var roll_time : float = 0.8
 export(int) var max_health := 100
 export(int) var punch_damage = 10
@@ -44,9 +44,6 @@ var profile_color : Color = Color.white
 var _velocity : Vector3  = Vector3.ZERO
 var _roll_timer  : float    = 0.0
 var _roll_dir   := Vector3.ZERO
-var _roll_elapsed_bias  = 0.0
-var _remote_roll_timer := 0.0
-var _remote_roll_dir   := Vector3.ZERO
 var _camera_pitch    : float    = 0.0
 const _pitch_min     : float    = deg2rad(-80)
 const _pitch_max     : float    = deg2rad( 60)
@@ -113,7 +110,6 @@ func _physics_process(delta):
 	# —— ROLL OVERRIDE ——
 	if _roll_timer > 0.0:
 		_roll_timer -= delta
-
 		# full, deterministic roll movement
 		var v = _roll_dir * roll_speed
 		v.y += gravity * delta
@@ -188,8 +184,10 @@ func _local_movement(delta):
 
 	# ───── 2. NEW single‑key actions (they take precedence over movement) ─────
 	if Input.is_action_just_pressed("roll"):
+		var forward = global_transform.basis.z.normalized()
+		_roll_dir = forward
 		var payload = {
-			"dir": [_roll_dir.x, _roll_dir.y, _roll_dir.z],
+			"dir": [forward.x, forward.y, forward.z],
 			"t":   OS.get_ticks_msec(),
 			"pos": [
 				global_transform.origin.x,
@@ -295,17 +293,13 @@ func _begin_roll(data: Dictionary) -> void:
 	# 4c) trigger your anim state
 	_travel("StandToRoll")
 	
-	
-
-func is_remotely_rolling() -> bool:
-	return _remote_roll_timer > 0.0
 
 func _update_animation(delta):
 	# --- keep cache in sync ---
 	var tree_state = _sm.get_current_node()
 	if tree_state != _current_state:
 		_current_state = tree_state
-	if _roll_timer > 0.0 or _remote_roll_timer > 0.0:
+	if _roll_timer > 0.0:
 		_travel("StandToRoll")
 		return
 	if BUSY_STATES.has(_current_state):

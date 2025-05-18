@@ -162,9 +162,10 @@ func _on_hook(args:Array) -> void:
 
 func _on_roll(args):
 	var data = JSON.parse(args[0]).result
-	var node = players[str(data.id)].node
-	node._begin_roll(data)
-	
+	var id   = str(args[1].id)
+	if players.has(id):
+		players[id].node._begin_roll(data)
+
 func _on_apply_attack(args:Array) -> void:
 	print("<<< apply_attack RPC received, args:", args)
 	if args.size() < 1:
