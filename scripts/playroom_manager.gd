@@ -105,6 +105,7 @@ func _ready():
 	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
 	Playroom.RPC.register("punch", _bridge("_on_punch"))
 	Playroom.RPC.register("hook",  _bridge("_on_hook"))
+	Playroom.RPC.register("jump", _bridge("_on_player_jump"))
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
 		opts.gameId = "I2okszCMAwuMeW4fxFGD"
@@ -199,6 +200,21 @@ func _on_apply_attack(args:Array) -> void:
 	var dmg = int(data.get("damage", 0))
 	if dmg > 0:
 		player_node.remote_apply_damage(dmg)
+		
+func _on_player_jump(args:Array) -> void:
+	var sender_state = null
+	if args.size() > 1:
+		sender_state = args[1]
+	if sender_state == null:
+		return
+	# extract the player ID and find their node
+	var id = str(sender_state.id)
+	if not players.has(id):
+		return
+
+	# tell that player to go into the Jump state
+	players[id].node._begin_jump()
+
 
 # ---------------------------------------------------------------------#
 #  Lobby / join / quit                                                 #

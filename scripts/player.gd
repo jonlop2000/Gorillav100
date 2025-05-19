@@ -4,11 +4,11 @@ var Playroom = JavaScript.get_interface("Playroom")
 # ────────────────────────────────────────────────────────────────────
 #  Tunables
 # ────────────────────────────────────────────────────────────────────
-const BUSY_STATES = ["Punch", "Hook", "Hit", "Death"]
+const BUSY_STATES = ["Punch", "Hook", "Hit", "Death", "KnockBack"]
 
 export var move_speed : float = 10.0
-export var jump_speed : float = 10.0
-export var gravity : float = -28.0
+export var jump_speed : float = 6.0
+export var gravity : float = -30.0
 export var mouse_sensitivity : float = 0.002
 export var roll_speed : float = 4.0
 export var roll_time : float = 0.8
@@ -26,6 +26,7 @@ var health := max_health
 var _send_timer := 0.0
 var _kb_vel: Vector3 = Vector3.ZERO
 var _kb_timer: float = 0.0
+var _jump_timer: float = 0.0
 var _recover_after_kb: bool = false
 var _remote_roll_start : Vector3
 var _remote_roll_end   : Vector3
@@ -49,7 +50,7 @@ var _camera_pitch    : float    = 0.0
 const _pitch_min     : float    = deg2rad(-80)
 const _pitch_max     : float    = deg2rad( 60)
 const PLAYER_SEND_RATE := 1.0 / 30.0
-
+const JUMP_DURATION := 0.967     # total airtime, roughly = 2 * jump_speed / -gravity
 # cache children
 onready var _camera_mount : Spatial = $camera_mount
 onready var _camera : Camera = $camera_mount/Camera
@@ -90,8 +91,6 @@ func make_remote():
 func _input(event):
 	if not is_local:
 		return
-	if event.is_action_pressed("jump"):
-		_jump_buffered = true
 	# ── 1. If the mouse is *not* captured, grab it on the next click ──
 	if Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
 		if event is InputEventMouseButton and event.pressed:
@@ -110,6 +109,24 @@ func _input(event):
 #  Main loop
 # ────────────────────────────────────────────────────────────────────
 func _physics_process(delta):
+	_update_animation(delta)
+	# Jump override
+	if _jump_timer > 0.0:
+		_jump_timer -= delta
+		# apply jump physics
+		_velocity.y += gravity * delta
+		_velocity = move_and_slide(_velocity, Vector3.UP)
+		if _jump_timer <= 0.0:
+			_travel("Idle")
+		return
+	
+	if _kb_timer > 0.0:
+		_kb_timer -= delta
+		_velocity = _kb_vel + Vector3(0, -9.8 * delta, 0)
+		_velocity = move_and_slide(_velocity, Vector3.UP)
+		return
+	if _current_state == "KnockBack":
+		return
 	# —— ROLL OVERRIDE ——
 	if _roll_timer > 0.0:
 		_roll_timer -= delta
@@ -123,14 +140,6 @@ func _physics_process(delta):
 			_velocity = Vector3.ZERO
 			_recover_after_roll = true
 		return    # skip the rest of _physics_process while rolling
-	# —— KNOCKBACK OVERRIDE ——
-	if _kb_timer > 0.0:
-		_kb_timer -= delta
-		_velocity = _kb_vel + Vector3(0, -9.8 * delta, 0)
-		_velocity = move_and_slide(_velocity, Vector3.UP)
-		if _kb_timer <= 0.0 and _recover_after_kb:
-			_recover_after_kb = false
-		return   # skip normal movement & interp
 
 	# Local vs Remote movement
 	if is_local:
@@ -138,7 +147,6 @@ func _physics_process(delta):
 	else:
 		_calc_remote_velocity(delta)
 
-	_update_animation(delta)
 
 	# ─── Throttle & send per-axis state (non-host only) ──────────────
 	if is_local and not Playroom.isHost():
@@ -163,8 +171,9 @@ func _local_movement(delta):
 	if BUSY_STATES.has(_current_state):
 		_velocity = move_and_slide(_velocity, Vector3.UP)
 		return
-
-	# ───── 1. If we’re currently rolling, keep rolling and bail ─────
+	if Input.is_action_just_pressed("jump") and is_on_floor():
+		_jump_buffered = true
+	# ───── 1. If we’re currently rolling, keep rollsing and bail ─────
 	if _roll_timer > 0.0:
 		_roll_timer -= delta
 		_velocity = _roll_dir * roll_speed
@@ -229,8 +238,11 @@ func _local_movement(delta):
 
 	# If the player tapped jump while in the air, queue it
 	if _jump_buffered and is_on_floor():
-		_velocity.y = jump_speed
 		_jump_buffered = false
+		_jump_timer = JUMP_DURATION
+		_velocity.y = jump_speed
+		_travel("Jump")
+		Playroom.RPC.call("jump", "", Playroom.RPC.Mode.OTHERS)
 
 	# move & update smoothed speed
 	_velocity = move_and_slide(_velocity, Vector3.UP)
@@ -280,6 +292,12 @@ func remote_apply_knockback(dir:Vector3, force:float, anim:String="KnockBack") -
 	_kb_vel   = dir * force
 	_kb_timer = 0.3
 	_travel(anim)      # now uses whatever anim you passed in
+
+func _begin_jump() -> void:
+	# same as local: start your physics timer + anim
+	_velocity.y = jump_speed
+	_jump_timer = JUMP_DURATION
+	_travel("Jump")
 
 
 func _begin_roll(data: Dictionary) -> void:
