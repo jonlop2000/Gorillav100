@@ -45,15 +45,20 @@ onready var nav_agent : NavigationAgent = $NavigationAgent
 onready var hit_area = $visual/GorillaBossGD/Armature/Skeleton/BoneAttachment/HitArea
 onready var hp_bar = $HealthViewport/UIRoot/Healthbar
 onready var ground_ray = $RayCast
+onready var boss_mesh : MeshInstance = $visual/GorillaBossGD/Armature/Skeleton/Cube
+onready var hit_particles : CPUParticles = $visual/GorillaBossGD/Armature/Skeleton/Cube/CPUParticles
+onready var hit_sfx : AudioStreamPlayer3D = $HitSound
+var _orig_albedo : Color = Color(1, 1, 1)   # <── add this line
+
 
 ##  Signals  (manager listens to these)
 signal anim_changed(anim_name)
 signal health_changed(hp)
 
 var moves = {
-	"Melee": {"range":1.0, "cooldown":1.0,  "weight":5, "knockback": 3.0, "damage":8, "func":"_do_melee"},
+	"Melee": {"range":1.0, "cooldown":2.0,  "weight":5, "knockback": 3.0, "damage":8, "func":"_do_melee"},
 	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":3, "knockback": 3.0, "damage":15, "func":"_do_combo"},
-	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 30.0, "damage":20, "func":"_do_swing"},
+	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 20.0, "damage":20, "func":"_do_swing"},
 	"BattleCry": {"range":3.0, "cooldown":2.0, "weight":0.5, "knockback": 10.0, "damage":5, "func":"_do_battlecry"},
 	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0, "damage":20,  "func":"_do_despair_combo", "desperation_only":true}
 }
@@ -70,7 +75,11 @@ func _ready():
 	for name in moves.keys():
 		_last_used[name] = -INF
 	_nav_map = get_world().get_navigation_map()
-
+	
+	var mat = boss_mesh.get_active_material(0)
+	if mat is SpatialMaterial:
+		_orig_albedo = mat.albedo_color
+		
 	hit_area.monitoring = true
 	hit_area.connect("body_entered", self, "_on_hit_area_body_entered")
 	hit_area.connect("body_exited", self, "_on_hit_area_body_exited")
@@ -171,7 +180,6 @@ func _broadcast_attack(move_name:String) -> void:
 
 	for body in targets:
 		_broadcast_attack_to_target(move_name, body)
-
 		
 
 ## ───────────────  Host‑only physics / AI  ─────────────── ##
@@ -449,16 +457,12 @@ func take_damage(amount : int) -> void:
 	if not is_host: return
 	health = clamp(health - amount, 0, max_health)
 	emit_signal("health_changed", health)
-	_flash_damage()
+	_react_to_hit()
 	if health == 0:
 		_die()
 
 func _update_hp_bar():
 	hp_bar.value = health
-
-func _flash_damage():
-	# quick red flash – placeholder
-	pass
 
 func _die():
 	sm.travel("Death")
@@ -469,3 +473,27 @@ func _die():
 ## ───────────────  Utilities  ─────────────── ##
 func get_current_anim() -> String:
 	return sm.get_current_node()
+	
+
+# ─── Hit-flash ───────────────────────────────────────────
+func _flash_hit() -> void:
+	var mat = boss_mesh.get_active_material(0)
+	if mat is SpatialMaterial:
+		mat.albedo_color = Color(1,0.25,0.25)
+		yield(get_tree().create_timer(0.08), "timeout")
+		mat.albedo_color = _orig_albedo
+
+func _emit_hit_particles() -> void:
+	hit_particles.emitting = false
+	hit_particles.emitting = true
+
+func _play_hit_sfx() -> void:
+	hit_sfx.pitch_scale = 1.0 + rand_range(-0.1, 0.1)
+	hit_sfx.play()
+
+func _react_to_hit() -> void:
+	_flash_hit()
+	_emit_hit_particles()
+	_play_hit_sfx()
+
+

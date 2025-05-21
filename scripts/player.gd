@@ -7,7 +7,7 @@ var Playroom = JavaScript.get_interface("Playroom")
 const BUSY_STATES = ["Punch", "Hook", "Hit", "Death", "KnockBack"]
 
 export var move_speed : float = 10.0
-export var jump_speed : float = 6.0
+export var jump_speed : float = 10.0
 export var gravity : float = -30.0
 export var mouse_sensitivity : float = 0.002
 export var roll_speed : float = 4.0
@@ -50,7 +50,7 @@ var _camera_pitch    : float    = 0.0
 const _pitch_min     : float    = deg2rad(-80)
 const _pitch_max     : float    = deg2rad( 60)
 const PLAYER_SEND_RATE := 1.0 / 30.0
-const JUMP_DURATION := 0.967     # total airtime, roughly = 2 * jump_speed / -gravity
+const JUMP_DURATION := 0.5     # total airtime, roughly = 2 * jump_speed / -gravity
 # cache children
 onready var _camera_mount : Spatial = $camera_mount
 onready var _camera : Camera = $camera_mount/Camera
@@ -125,8 +125,8 @@ func _physics_process(delta):
 		_velocity = _kb_vel + Vector3(0, -9.8 * delta, 0)
 		_velocity = move_and_slide(_velocity, Vector3.UP)
 		return
-	if _current_state == "KnockBack":
-		return
+#	if _current_state == "KnockBack":
+#		return
 	# —— ROLL OVERRIDE ——
 	if _roll_timer > 0.0:
 		_roll_timer -= delta
