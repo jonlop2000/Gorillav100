@@ -10,11 +10,11 @@ export var move_speed : float = 10.0
 export var jump_speed : float = 10.0
 export var gravity : float = -30.0
 export var mouse_sensitivity : float = 0.002
-export var roll_speed : float = 4.0
+export var roll_speed : float = 6.0
 export var roll_time : float = 0.8
 export(int) var max_health := 100
-export(int) var punch_damage = 10
-export(int) var hook_damage  = 25
+export(int) var punch_damage = 30
+export(int) var hook_damage  = 55
 onready var _tree : AnimationTree = $visuals/Soldier/AnimationTree
 onready var _sm : AnimationNodeStateMachinePlayback = _tree.get("parameters/StateMachine/playback")
 
@@ -36,7 +36,7 @@ var _jump_buffered := false
 var _attack_active : bool = false
 var _attack_damage : int  = 0
 var _attack_type   : String = ""
-
+var _move_lock_time := 0.0
 # ────────────────────────────────────────────────────────────────────
 #  Public flags set by PlayroomManager
 # ────────────────────────────────────────────────────────────────────
@@ -147,13 +147,16 @@ func _physics_process(delta):
 			_velocity = Vector3.ZERO
 			_recover_after_roll = true
 		return    # skip the rest of _physics_process while rolling
-
-	# Local vs Remote movement
-	if is_local:
-		_local_movement(delta)
+	if _move_lock_time > 0.0:
+		_move_lock_time -= delta
+		# zero horizontal motion but keep gravity
+		_velocity.x = 0
+		_velocity.z = 0
 	else:
-		_calc_remote_velocity(delta)
-
+		if is_local:
+			_local_movement(delta)
+		else:
+			_calc_remote_velocity(delta)
 
 	# ─── Throttle & send per-axis state (non-host only) ──────────────
 	if is_local and not Playroom.isHost():
@@ -292,18 +295,31 @@ func _travel(state_name : String) -> void:
 		return               # avoid retriggering → no jitter
 	_sm.travel(state_name)
 	_current_state = state_name
+	match state_name:
+		"Punch":
+			_tree.set("parameters/TS/scale", 1.35)   # 50 % faster
+		"Hook":
+			_tree.set("parameters/TS/scale", 1.35)
+		_:
+			_tree.set("parameters/TS/scale", 1.35)
 
 func _do_punch():
 	_travel("Punch")
+	_velocity.x = 0          # kill slide instantly
+	_velocity.z = 0
+	_move_lock_time = 0.3    # freeze 0.3 s
 	_attack_type   = "punch"
 	Playroom.RPC.call("punch", JSON.print({}), Playroom.RPC.Mode.ALL)
 	_attack(punch_damage, 0.7)
 	
 func _do_hook(): 
 	_travel("Hook")
+	_velocity.x = 0
+	_velocity.z = 0
+	_move_lock_time = 0.4
 	_attack_type   = "hook"
 	Playroom.RPC.call("hook", JSON.print({}), Playroom.RPC.Mode.ALL)
-	_attack(hook_damage, 0.9)
+	_attack(hook_damage, 1.3)
 	
 
 func _attack(damage_amount: int, duration: float = 0.2) -> void:

@@ -35,6 +35,10 @@ var _grounded : bool = false
 var _attack_active := false
 var _hit_targets := []        # list of player IDs already hit this attack
 var _current_move := ""       # name of the move we’re in the middle of
+var _next_stagger_hp : int   # set in _ready() → max_health * 0.75
+var _is_staggered : bool = false
+var _stagger_time : float = 10.5   # seconds boss stays kneeling
+var _stagger_timer : float = 0.0
 
 ##  AnimationTree shortcuts
 onready var anim_tree : AnimationTree  = $visual/GorillaBossGD/AnimationTree
@@ -57,11 +61,11 @@ signal anim_changed(anim_name)
 signal health_changed(hp)
 
 var moves = {
-	"Melee": {"range":1.0, "cooldown":2.0,  "weight":5, "knockback": 3.0, "damage":8, "func":"_do_melee"},
-	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":3, "knockback": 3.0, "damage":15, "func":"_do_combo"},
-	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 10.0, "damage":20, "func":"_do_swing"},
-	"BattleCry": {"range":3.0, "cooldown":2.0, "weight":0.5, "knockback": 10.0, "damage":5, "func":"_do_battlecry"},
-	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0, "damage":20,  "func":"_do_despair_combo", "desperation_only":true}
+	"Melee": {"range":1.0, "cooldown":2.0,  "weight":5, "knockback": 2.0, "damage":0, "func":"_do_melee"},
+	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":3, "knockback": 2.0, "damage":0, "func":"_do_combo"},
+	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 6.0, "damage":0, "func":"_do_swing"},
+	"BattleCry": {"range":2.0, "cooldown":2.0, "weight":0.5, "knockback": 5.0, "damage":0, "func":"_do_battlecry"},
+	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0, "damage":0,  "func":"_do_despair_combo", "desperation_only":true}
 }
 
 ## ───────────────  Setup  ─────────────── ##
@@ -69,6 +73,7 @@ func _ready():
 	hp_bar.min_value = 0
 	hp_bar.max_value = max_health
 	hp_bar.value = health
+	_next_stagger_hp = int(max_health * 0.75)
 	anim_tree.active = true
 	_target_pos = global_transform.origin
 	_target_rot_y = rotation.y
@@ -148,8 +153,8 @@ func _broadcast_attack_to_target(move_name:String, body:Node) -> void:
 		"target_id": body.name.replace("player_",""),
 		"attack_name": move_name,
 		"direction": [dir.x, dir.y, dir.z],
-		"force":     m.knockback,
-		"damage":    m.damage
+		"force":  m.knockback,
+		"damage": m.damage
 	}
 	print("    payload:", payload)
 	Playroom.RPC.call(
@@ -187,6 +192,10 @@ func _broadcast_attack(move_name:String) -> void:
 func _physics_process(delta):
 #	if _test_freeze:
 #		return
+	_update_stagger(delta) 
+	if _is_staggered:
+		_update_hp_bar()
+		return
 	_grounded = ground_ray.is_colliding()
 	if is_host:
 		_state_machine(delta)
@@ -438,8 +447,37 @@ func _apply_vertical(delta: float) -> void:
 func apply_damage(amount:int) -> void:
 	health = max(health - amount, 0)
 	emit_signal("health_changed", health)
+	if health > 0 and health <= _next_stagger_hp and not _is_staggered:
+		_enter_stagger()
 	if health <= 0:
 		sm.travel("Death")
+
+func _enter_stagger() -> void:
+	if _is_staggered: return
+	_is_staggered  = true
+	_stagger_timer = _stagger_time
+	_current_move   = "" 
+	_attack_active  = false
+	sm.travel("StandToKneel")       
+	nav_agent.set_physics_process(false)
+	_next_stagger_hp = max(_next_stagger_hp - int(max_health * 0.25), 0)
+
+func _update_stagger(delta: float) -> void:
+	if not _is_staggered:
+		return
+	_stagger_timer -= delta
+	if _stagger_timer > 0:
+		_update_hp_bar()
+		return
+	_is_staggered = false
+	sm.travel("KneelToStand")
+	nav_agent.set_physics_process(true)
+	_queue_hurricane()
+
+func _queue_hurricane() -> void:
+	# push a desperation move right after recovery
+	_current_move = "HurricaneKick"
+	_do_despair_combo()     # or whatever you named the HK function
 
 
 func _direct_steer(dest: Vector3, delta: float) -> void:
