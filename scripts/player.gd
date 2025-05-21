@@ -33,6 +33,9 @@ var _remote_roll_end   : Vector3
 var _remote_roll_elapsed : float = 0.0
 var _recover_after_roll    = false
 var _jump_buffered := false
+var _attack_active : bool = false
+var _attack_damage : int  = 0
+var _attack_type   : String = ""
 
 # ────────────────────────────────────────────────────────────────────
 #  Public flags set by PlayroomManager
@@ -55,11 +58,15 @@ const JUMP_DURATION := 0.5     # total airtime, roughly = 2 * jump_speed / -grav
 onready var _camera_mount : Spatial = $camera_mount
 onready var _camera : Camera = $camera_mount/Camera
 onready var _anim : AnimationPlayer = $visuals/Soldier/AnimationPlayer
+onready var hit_area = $visuals/Soldier/Armature/Skeleton/BoneAttachment/HitArea
 
 signal health_changed(hp)
 
 func _ready():
-	_tree.active = true        
+	_tree.active = true   
+	hit_area.monitoring = true
+	hit_area.connect("body_entered", self, "_on_hit_area_body_entered")
+	hit_area.connect("body_exited", self, "_on_hit_area_body_exited")     
 	_travel("Idle")  
 
 func _notification(what):
@@ -262,6 +269,21 @@ func _calc_remote_velocity(delta):
 	var raw_speed = Vector3(frame_v.x, 0, frame_v.z).length()
 	_smoothed_speed = lerp(_smoothed_speed, raw_speed, delta * 10.0)
 	
+	
+func _on_hit_area_body_entered(body: Node) -> void:
+	if not _attack_active or not body.is_in_group("boss"):
+		return
+	_attack_active = false    # only one hit per swing
+	var payload = { "damage": _attack_damage }
+	var raw     = JSON.print(payload)
+	# send the RPC you queued up
+	Playroom.RPC.call(_attack_type, raw, Playroom.RPC.Mode.ALL)
+	# clear so stray collision can't re-fire
+	_attack_type = ""
+
+func _on_hit_area_body_exited(body: Node) -> void:
+	# you can ignore or use this to reset flags if you like
+	pass
 # ────────────────────────────────────────────────────────────────────
 #  Animation via AnimationTree StateMachine
 # ────────────────────────────────────────────────────────────────────
@@ -273,14 +295,24 @@ func _travel(state_name : String) -> void:
 
 func _do_punch():
 	_travel("Punch")
-	var payload = { "damage": punch_damage }
-	Playroom.RPC.call("punch", JSON.print(payload), Playroom.RPC.Mode.ALL)
+	_attack_type   = "punch"
+	Playroom.RPC.call("punch", JSON.print({}), Playroom.RPC.Mode.ALL)
+	_attack(punch_damage, 0.7)
 	
 func _do_hook(): 
 	_travel("Hook")
-	var payload = { "damage": hook_damage }
-	Playroom.RPC.call("hook", JSON.print(payload), Playroom.RPC.Mode.ALL)
+	_attack_type   = "hook"
+	Playroom.RPC.call("hook", JSON.print({}), Playroom.RPC.Mode.ALL)
+	_attack(hook_damage, 0.9)
 	
+
+func _attack(damage_amount: int, duration: float = 0.2) -> void:
+	_attack_damage = damage_amount
+	_attack_active = true
+	# automatically turn it off after duration seconds
+	yield(get_tree().create_timer(duration), "timeout")
+	_attack_active = false
+
 func remote_apply_damage(amount:int) -> void:
 	health = max(health - amount, 0)
 	emit_signal("health_changed", health)

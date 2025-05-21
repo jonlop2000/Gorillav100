@@ -3183,7 +3183,7 @@ mesh = SubResource( 14 )
 skin = SubResource( 2 )
 
 [node name="BoneAttachment" type="BoneAttachment" parent="visuals/Soldier/Armature/Skeleton"]
-transform = Transform( 0.517729, -0.59446, -0.615285, 0.702439, 0.705909, -0.0909557, 0.488404, -0.38511, 0.783041, 18.5596, 90.8753, -142.412 )
+transform = Transform( 0.473762, -0.695001, -0.540856, 0.617237, 0.70011, -0.358977, 0.628148, -0.163767, 0.760665, 13.29, 88.72, -124.356 )
 bone_name = "mixamorig_LeftHand"
 
 [node name="HitArea" type="Area" parent="visuals/Soldier/Armature/Skeleton/BoneAttachment"]

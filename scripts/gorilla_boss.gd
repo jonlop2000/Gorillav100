@@ -13,6 +13,7 @@ export(float) var rotation_speed := 5.0
 export(float) var jump_speed = 12.0
 export(float) var jump_height_threshold = 1.5 
 export(float) var gravity = 9.8
+export(bool) var _test_freeze := true
 ## ───────────────  Runtime  ─────────────── ##
 
 var Playroom = JavaScript.get_interface("Playroom")
@@ -58,7 +59,7 @@ signal health_changed(hp)
 var moves = {
 	"Melee": {"range":1.0, "cooldown":2.0,  "weight":5, "knockback": 3.0, "damage":8, "func":"_do_melee"},
 	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":3, "knockback": 3.0, "damage":15, "func":"_do_combo"},
-	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 20.0, "damage":20, "func":"_do_swing"},
+	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 10.0, "damage":20, "func":"_do_swing"},
 	"BattleCry": {"range":3.0, "cooldown":2.0, "weight":0.5, "knockback": 10.0, "damage":5, "func":"_do_battlecry"},
 	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0, "damage":20,  "func":"_do_despair_combo", "desperation_only":true}
 }
@@ -184,6 +185,8 @@ func _broadcast_attack(move_name:String) -> void:
 
 ## ───────────────  Host‑only physics / AI  ─────────────── ##
 func _physics_process(delta):
+#	if _test_freeze:
+#		return
 	_grounded = ground_ray.is_colliding()
 	if is_host:
 		_state_machine(delta)
@@ -439,7 +442,6 @@ func apply_damage(amount:int) -> void:
 		sm.travel("Death")
 
 
-
 func _direct_steer(dest: Vector3, delta: float) -> void:
 	var dir = dest - global_transform.origin
 	dir.y = 0
@@ -457,7 +459,6 @@ func take_damage(amount : int) -> void:
 	if not is_host: return
 	health = clamp(health - amount, 0, max_health)
 	emit_signal("health_changed", health)
-	_react_to_hit()
 	if health == 0:
 		_die()
 

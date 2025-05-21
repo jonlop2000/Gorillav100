@@ -103,9 +103,9 @@ func _ready():
 	Playroom.RPC.register("hook", _bridge("_on_hook"))
 	Playroom.RPC.register("roll", _bridge("_on_roll"))
 	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
-	Playroom.RPC.register("punch", _bridge("_on_punch"))
-	Playroom.RPC.register("hook",  _bridge("_on_hook"))
 	Playroom.RPC.register("jump", _bridge("_on_player_jump"))
+	Playroom.RPC.register("show_hit_effects", _bridge("_on_show_hit_effects"))
+
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
 		opts.gameId = "I2okszCMAwuMeW4fxFGD"
@@ -138,6 +138,7 @@ func _on_punch(args:Array) -> void:
 			var parsed = JSON.parse(raw)
 			if parsed.error == OK and parsed.result.has("damage"):
 				boss_node.apply_damage(int(parsed.result.damage))
+				Playroom.RPC.call("show_hit_effects", "", Playroom.RPC.Mode.ALL)
 				Playroom.setState("boss", JSON.print(_pack_boss()))
 
 func _on_hook(args:Array) -> void:
@@ -159,7 +160,13 @@ func _on_hook(args:Array) -> void:
 			var parsed = JSON.parse(raw)
 			if parsed.error == OK and parsed.result.has("damage"):
 				boss_node.apply_damage(int(parsed.result.damage))
+				Playroom.RPC.call("show_hit_effects", "", Playroom.RPC.Mode.ALL)
 				Playroom.setState("boss", JSON.print(_pack_boss()))
+
+func _on_show_hit_effects(_args:Array) -> void:
+	# Whenever this runs (on host AND clients), trigger the boss VFX
+	if boss_node:
+		boss_node._react_to_hit()
 
 func _on_roll(args):
 	var data = JSON.parse(args[0]).result
@@ -227,11 +234,11 @@ func _on_insert_coin(_args):
 	# 3) spawn boss & push the room snapshot (host only)
 	if boss_node == null:
 		boss_node = _spawn_boss()
+		boss_node._test_freeze = true
 	# host pushes the real boss state
 	if Playroom.isHost():
 		Playroom.setState("boss", JSON.print(_pack_boss()))
 		_push_room_init_snapshot()
-
 
 func _on_player_join(args):
 	var state = args[0]
