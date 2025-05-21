@@ -13,6 +13,7 @@ export(float) var rotation_speed := 5.0
 export(float) var jump_speed = 12.0
 export(float) var jump_height_threshold = 1.5 
 export(float) var gravity = 9.8
+export(bool) var _test_freeze := true
 ## ───────────────  Runtime  ─────────────── ##
 
 var Playroom = JavaScript.get_interface("Playroom")
@@ -34,6 +35,10 @@ var _grounded : bool = false
 var _attack_active := false
 var _hit_targets := []        # list of player IDs already hit this attack
 var _current_move := ""       # name of the move we’re in the middle of
+var _next_stagger_hp : int   # set in _ready() → max_health * 0.75
+var _is_staggered : bool = false
+var _stagger_time : float = 10.5   # seconds boss stays kneeling
+var _stagger_timer : float = 0.0
 
 ##  AnimationTree shortcuts
 onready var anim_tree : AnimationTree  = $visual/GorillaBossGD/AnimationTree
@@ -45,17 +50,22 @@ onready var nav_agent : NavigationAgent = $NavigationAgent
 onready var hit_area = $visual/GorillaBossGD/Armature/Skeleton/BoneAttachment/HitArea
 onready var hp_bar = $HealthViewport/UIRoot/Healthbar
 onready var ground_ray = $RayCast
+onready var boss_mesh : MeshInstance = $visual/GorillaBossGD/Armature/Skeleton/Cube
+onready var hit_particles : CPUParticles = $visual/GorillaBossGD/Armature/Skeleton/Cube/CPUParticles
+onready var hit_sfx : AudioStreamPlayer3D = $HitSound
+var _orig_albedo : Color = Color(1, 1, 1)   # <── add this line
+
 
 ##  Signals  (manager listens to these)
 signal anim_changed(anim_name)
 signal health_changed(hp)
 
 var moves = {
-	"Melee": {"range":1.0, "cooldown":1.0,  "weight":4, "knockback": 3.0, "damage":8, "func":"_do_melee"},
-	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":2, "knockback": 3.0, "damage":15, "func":"_do_combo"},
-	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1, "knockback": 10.0, "damage":20, "func":"_do_swing"},
-	"BattleCry": {"range":3.0, "cooldown":2.0, "weight":0.5, "knockback": 10.0, "damage":5, "func":"_do_battlecry"},
-	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0, "damage":20,  "func":"_do_despair_combo", "desperation_only":true}
+	"Melee": {"range":1.0, "cooldown":2.0,  "weight":5, "knockback": 2.0, "damage":0, "func":"_do_melee"},
+	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":3, "knockback": 2.0, "damage":0, "func":"_do_combo"},
+	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 6.0, "damage":0, "func":"_do_swing"},
+	"BattleCry": {"range":2.0, "cooldown":2.0, "weight":0.5, "knockback": 5.0, "damage":0, "func":"_do_battlecry"},
+	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0, "damage":0,  "func":"_do_despair_combo", "desperation_only":true}
 }
 
 ## ───────────────  Setup  ─────────────── ##
@@ -63,6 +73,7 @@ func _ready():
 	hp_bar.min_value = 0
 	hp_bar.max_value = max_health
 	hp_bar.value = health
+	_next_stagger_hp = int(max_health * 0.75)
 	anim_tree.active = true
 	_target_pos = global_transform.origin
 	_target_rot_y = rotation.y
@@ -70,7 +81,11 @@ func _ready():
 	for name in moves.keys():
 		_last_used[name] = -INF
 	_nav_map = get_world().get_navigation_map()
-
+	
+	var mat = boss_mesh.get_active_material(0)
+	if mat is SpatialMaterial:
+		_orig_albedo = mat.albedo_color
+		
 	hit_area.monitoring = true
 	hit_area.connect("body_entered", self, "_on_hit_area_body_entered")
 	hit_area.connect("body_exited", self, "_on_hit_area_body_exited")
@@ -136,9 +151,10 @@ func _broadcast_attack_to_target(move_name:String, body:Node) -> void:
 	var dir = (body.global_transform.origin - global_transform.origin).normalized()
 	var payload = {
 		"target_id": body.name.replace("player_",""),
+		"attack_name": move_name,
 		"direction": [dir.x, dir.y, dir.z],
-		"force":     m.knockback,
-		"damage":    m.damage
+		"force":  m.knockback,
+		"damage": m.damage
 	}
 	print("    payload:", payload)
 	Playroom.RPC.call(
@@ -170,11 +186,16 @@ func _broadcast_attack(move_name:String) -> void:
 
 	for body in targets:
 		_broadcast_attack_to_target(move_name, body)
-
 		
 
 ## ───────────────  Host‑only physics / AI  ─────────────── ##
 func _physics_process(delta):
+#	if _test_freeze:
+#		return
+	_update_stagger(delta) 
+	if _is_staggered:
+		_update_hp_bar()
+		return
 	_grounded = ground_ray.is_colliding()
 	if is_host:
 		_state_machine(delta)
@@ -426,9 +447,37 @@ func _apply_vertical(delta: float) -> void:
 func apply_damage(amount:int) -> void:
 	health = max(health - amount, 0)
 	emit_signal("health_changed", health)
+	if health > 0 and health <= _next_stagger_hp and not _is_staggered:
+		_enter_stagger()
 	if health <= 0:
 		sm.travel("Death")
 
+func _enter_stagger() -> void:
+	if _is_staggered: return
+	_is_staggered  = true
+	_stagger_timer = _stagger_time
+	_current_move   = "" 
+	_attack_active  = false
+	sm.travel("StandToKneel")       
+	nav_agent.set_physics_process(false)
+	_next_stagger_hp = max(_next_stagger_hp - int(max_health * 0.25), 0)
+
+func _update_stagger(delta: float) -> void:
+	if not _is_staggered:
+		return
+	_stagger_timer -= delta
+	if _stagger_timer > 0:
+		_update_hp_bar()
+		return
+	_is_staggered = false
+	sm.travel("KneelToStand")
+	nav_agent.set_physics_process(true)
+	_queue_hurricane()
+
+func _queue_hurricane() -> void:
+	# push a desperation move right after recovery
+	_current_move = "HurricaneKick"
+	_do_despair_combo()     # or whatever you named the HK function
 
 
 func _direct_steer(dest: Vector3, delta: float) -> void:
@@ -448,16 +497,11 @@ func take_damage(amount : int) -> void:
 	if not is_host: return
 	health = clamp(health - amount, 0, max_health)
 	emit_signal("health_changed", health)
-	_flash_damage()
 	if health == 0:
 		_die()
 
 func _update_hp_bar():
 	hp_bar.value = health
-
-func _flash_damage():
-	# quick red flash – placeholder
-	pass
 
 func _die():
 	sm.travel("Death")
@@ -468,3 +512,27 @@ func _die():
 ## ───────────────  Utilities  ─────────────── ##
 func get_current_anim() -> String:
 	return sm.get_current_node()
+	
+
+# ─── Hit-flash ───────────────────────────────────────────
+func _flash_hit() -> void:
+	var mat = boss_mesh.get_active_material(0)
+	if mat is SpatialMaterial:
+		mat.albedo_color = Color(1,0.25,0.25)
+		yield(get_tree().create_timer(0.08), "timeout")
+		mat.albedo_color = _orig_albedo
+
+func _emit_hit_particles() -> void:
+	hit_particles.emitting = false
+	hit_particles.emitting = true
+
+func _play_hit_sfx() -> void:
+	hit_sfx.pitch_scale = 1.0 + rand_range(-0.1, 0.1)
+	hit_sfx.play()
+
+func _react_to_hit() -> void:
+	_flash_hit()
+	_emit_hit_particles()
+	_play_hit_sfx()
+
+

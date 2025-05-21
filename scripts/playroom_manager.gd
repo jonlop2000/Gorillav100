@@ -103,8 +103,9 @@ func _ready():
 	Playroom.RPC.register("hook", _bridge("_on_hook"))
 	Playroom.RPC.register("roll", _bridge("_on_roll"))
 	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
-	Playroom.RPC.register("punch", _bridge("_on_punch"))
-	Playroom.RPC.register("hook",  _bridge("_on_hook"))
+	Playroom.RPC.register("jump", _bridge("_on_player_jump"))
+	Playroom.RPC.register("show_hit_effects", _bridge("_on_show_hit_effects"))
+
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
 		opts.gameId = "I2okszCMAwuMeW4fxFGD"
@@ -137,6 +138,7 @@ func _on_punch(args:Array) -> void:
 			var parsed = JSON.parse(raw)
 			if parsed.error == OK and parsed.result.has("damage"):
 				boss_node.apply_damage(int(parsed.result.damage))
+				Playroom.RPC.call("show_hit_effects", "", Playroom.RPC.Mode.ALL)
 				Playroom.setState("boss", JSON.print(_pack_boss()))
 
 func _on_hook(args:Array) -> void:
@@ -158,7 +160,13 @@ func _on_hook(args:Array) -> void:
 			var parsed = JSON.parse(raw)
 			if parsed.error == OK and parsed.result.has("damage"):
 				boss_node.apply_damage(int(parsed.result.damage))
+				Playroom.RPC.call("show_hit_effects", "", Playroom.RPC.Mode.ALL)
 				Playroom.setState("boss", JSON.print(_pack_boss()))
+
+func _on_show_hit_effects(_args:Array) -> void:
+	# Whenever this runs (on host AND clients), trigger the boss VFX
+	if boss_node:
+		boss_node._react_to_hit()
 
 func _on_roll(args):
 	var data = JSON.parse(args[0]).result
@@ -179,23 +187,36 @@ func _on_apply_attack(args:Array) -> void:
 		push_error("apply_attack RPC: JSON.parse error %s" % parsed.error_string)
 		return
 	var data = parsed.result
-
-	var target_id = str(data.get("target_id",""))
+	var target_id = str(data.get("target_id", ""))
 	if not players.has(target_id):
 		return
 	var player_node = players[target_id].node
-
-	# apply knockback
+	var attack_name = data.get("attack_name", "")
+	print("→ attack_name =", attack_name)
+	var anim = "KnockBack"
+	if attack_name == "Melee" or attack_name == "MeleeCombo" or attack_name == "BattleCry":
+		anim = "Hit"
 	var dir_arr = data.get("direction", [])
 	if dir_arr.size() == 3:
 		var dir = Vector3(dir_arr[0], dir_arr[1], dir_arr[2]).normalized()
-		player_node.remote_apply_knockback(dir, float(data.get("force",0)))
-
-	# apply damage
+		player_node.remote_apply_knockback(dir, float(data.get("force", 0)), anim)
 	var dmg = int(data.get("damage", 0))
-	if dmg > 0 and player_node.has_method("remote_apply_damage"):
+	if dmg > 0:
 		player_node.remote_apply_damage(dmg)
-	print("applying knockback & damage to:", target_id)
+		
+func _on_player_jump(args:Array) -> void:
+	var sender_state = null
+	if args.size() > 1:
+		sender_state = args[1]
+	if sender_state == null:
+		return
+	# extract the player ID and find their node
+	var id = str(sender_state.id)
+	if not players.has(id):
+		return
+
+	# tell that player to go into the Jump state
+	players[id].node._begin_jump()
 
 
 # ---------------------------------------------------------------------#
@@ -213,11 +234,11 @@ func _on_insert_coin(_args):
 	# 3) spawn boss & push the room snapshot (host only)
 	if boss_node == null:
 		boss_node = _spawn_boss()
+		boss_node._test_freeze = true
 	# host pushes the real boss state
 	if Playroom.isHost():
 		Playroom.setState("boss", JSON.print(_pack_boss()))
 		_push_room_init_snapshot()
-
 
 func _on_player_join(args):
 	var state = args[0]

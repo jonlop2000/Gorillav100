@@ -4,17 +4,17 @@ var Playroom = JavaScript.get_interface("Playroom")
 # ────────────────────────────────────────────────────────────────────
 #  Tunables
 # ────────────────────────────────────────────────────────────────────
-const BUSY_STATES = ["Punch", "Hook", "Hit", "Death"]
+const BUSY_STATES = ["Punch", "Hook", "Hit", "Death", "KnockBack"]
 
 export var move_speed : float = 10.0
 export var jump_speed : float = 10.0
-export var gravity : float = -28.0
+export var gravity : float = -30.0
 export var mouse_sensitivity : float = 0.002
-export var roll_speed : float = 4.0
+export var roll_speed : float = 6.0
 export var roll_time : float = 0.8
 export(int) var max_health := 100
-export(int) var punch_damage = 10
-export(int) var hook_damage  = 25
+export(int) var punch_damage = 30
+export(int) var hook_damage  = 55
 onready var _tree : AnimationTree = $visuals/Soldier/AnimationTree
 onready var _sm : AnimationNodeStateMachinePlayback = _tree.get("parameters/StateMachine/playback")
 
@@ -26,12 +26,17 @@ var health := max_health
 var _send_timer := 0.0
 var _kb_vel: Vector3 = Vector3.ZERO
 var _kb_timer: float = 0.0
+var _jump_timer: float = 0.0
 var _recover_after_kb: bool = false
 var _remote_roll_start : Vector3
 var _remote_roll_end   : Vector3
 var _remote_roll_elapsed : float = 0.0
 var _recover_after_roll    = false
-
+var _jump_buffered := false
+var _attack_active : bool = false
+var _attack_damage : int  = 0
+var _attack_type   : String = ""
+var _move_lock_time := 0.0
 # ────────────────────────────────────────────────────────────────────
 #  Public flags set by PlayroomManager
 # ────────────────────────────────────────────────────────────────────
@@ -48,16 +53,20 @@ var _camera_pitch    : float    = 0.0
 const _pitch_min     : float    = deg2rad(-80)
 const _pitch_max     : float    = deg2rad( 60)
 const PLAYER_SEND_RATE := 1.0 / 30.0
-
+const JUMP_DURATION := 0.5     # total airtime, roughly = 2 * jump_speed / -gravity
 # cache children
 onready var _camera_mount : Spatial = $camera_mount
 onready var _camera : Camera = $camera_mount/Camera
 onready var _anim : AnimationPlayer = $visuals/Soldier/AnimationPlayer
+onready var hit_area = $visuals/Soldier/Armature/Skeleton/BoneAttachment/HitArea
 
 signal health_changed(hp)
 
 func _ready():
-	_tree.active = true        
+	_tree.active = true   
+	hit_area.monitoring = true
+	hit_area.connect("body_entered", self, "_on_hit_area_body_entered")
+	hit_area.connect("body_exited", self, "_on_hit_area_body_exited")     
 	_travel("Idle")  
 
 func _notification(what):
@@ -107,6 +116,24 @@ func _input(event):
 #  Main loop
 # ────────────────────────────────────────────────────────────────────
 func _physics_process(delta):
+	_update_animation(delta)
+	# Jump override
+	if _jump_timer > 0.0:
+		_jump_timer -= delta
+		# apply jump physics
+		_velocity.y += gravity * delta
+		_velocity = move_and_slide(_velocity, Vector3.UP)
+		if _jump_timer <= 0.0:
+			_travel("Idle")
+		return
+	
+	if _kb_timer > 0.0:
+		_kb_timer -= delta
+		_velocity = _kb_vel + Vector3(0, -9.8 * delta, 0)
+		_velocity = move_and_slide(_velocity, Vector3.UP)
+		return
+#	if _current_state == "KnockBack":
+#		return
 	# —— ROLL OVERRIDE ——
 	if _roll_timer > 0.0:
 		_roll_timer -= delta
@@ -120,22 +147,16 @@ func _physics_process(delta):
 			_velocity = Vector3.ZERO
 			_recover_after_roll = true
 		return    # skip the rest of _physics_process while rolling
-	# —— KNOCKBACK OVERRIDE ——
-	if _kb_timer > 0.0:
-		_kb_timer -= delta
-		_velocity = _kb_vel + Vector3(0, -9.8 * delta, 0)
-		_velocity = move_and_slide(_velocity, Vector3.UP)
-		if _kb_timer <= 0.0 and _recover_after_kb:
-			_recover_after_kb = false
-		return   # skip normal movement & interp
-
-	# Local vs Remote movement
-	if is_local:
-		_local_movement(delta)
+	if _move_lock_time > 0.0:
+		_move_lock_time -= delta
+		# zero horizontal motion but keep gravity
+		_velocity.x = 0
+		_velocity.z = 0
 	else:
-		_calc_remote_velocity(delta)
-
-	_update_animation(delta)
+		if is_local:
+			_local_movement(delta)
+		else:
+			_calc_remote_velocity(delta)
 
 	# ─── Throttle & send per-axis state (non-host only) ──────────────
 	if is_local and not Playroom.isHost():
@@ -160,8 +181,9 @@ func _local_movement(delta):
 	if BUSY_STATES.has(_current_state):
 		_velocity = move_and_slide(_velocity, Vector3.UP)
 		return
-
-	# ───── 1. If we’re currently rolling, keep rolling and bail ─────
+	if Input.is_action_just_pressed("jump") and is_on_floor():
+		_jump_buffered = true
+	# ───── 1. If we’re currently rolling, keep rollsing and bail ─────
 	if _roll_timer > 0.0:
 		_roll_timer -= delta
 		_velocity = _roll_dir * roll_speed
@@ -221,12 +243,16 @@ func _local_movement(delta):
 		_velocity.x = lerp(_velocity.x, 0, 0.2)
 		_velocity.z = lerp(_velocity.z, 0, 0.2)
 
-	# gravity / jump
-	if is_on_floor():
-		if Input.is_action_just_pressed("jump"):
-			_velocity.y = jump_speed
-	else:
-		_velocity.y += gravity * delta
+	# Always apply gravity
+	_velocity.y += gravity * delta
+
+	# If the player tapped jump while in the air, queue it
+	if _jump_buffered and is_on_floor():
+		_jump_buffered = false
+		_jump_timer = JUMP_DURATION
+		_velocity.y = jump_speed
+		_travel("Jump")
+		Playroom.RPC.call("jump", "", Playroom.RPC.Mode.OTHERS)
 
 	# move & update smoothed speed
 	_velocity = move_and_slide(_velocity, Vector3.UP)
@@ -246,6 +272,21 @@ func _calc_remote_velocity(delta):
 	var raw_speed = Vector3(frame_v.x, 0, frame_v.z).length()
 	_smoothed_speed = lerp(_smoothed_speed, raw_speed, delta * 10.0)
 	
+	
+func _on_hit_area_body_entered(body: Node) -> void:
+	if not _attack_active or not body.is_in_group("boss"):
+		return
+	_attack_active = false    # only one hit per swing
+	var payload = { "damage": _attack_damage }
+	var raw     = JSON.print(payload)
+	# send the RPC you queued up
+	Playroom.RPC.call(_attack_type, raw, Playroom.RPC.Mode.ALL)
+	# clear so stray collision can't re-fire
+	_attack_type = ""
+
+func _on_hit_area_body_exited(body: Node) -> void:
+	# you can ignore or use this to reset flags if you like
+	pass
 # ────────────────────────────────────────────────────────────────────
 #  Animation via AnimationTree StateMachine
 # ────────────────────────────────────────────────────────────────────
@@ -254,30 +295,57 @@ func _travel(state_name : String) -> void:
 		return               # avoid retriggering → no jitter
 	_sm.travel(state_name)
 	_current_state = state_name
+	match state_name:
+		"Punch":
+			_tree.set("parameters/TS/scale", 1.35)   # 50 % faster
+		"Hook":
+			_tree.set("parameters/TS/scale", 1.35)
+		_:
+			_tree.set("parameters/TS/scale", 1.35)
 
 func _do_punch():
 	_travel("Punch")
-	var payload = { "damage": punch_damage }
-	Playroom.RPC.call("punch", JSON.print(payload), Playroom.RPC.Mode.ALL)
+	_velocity.x = 0          # kill slide instantly
+	_velocity.z = 0
+	_move_lock_time = 0.3    # freeze 0.3 s
+	_attack_type   = "punch"
+	Playroom.RPC.call("punch", JSON.print({}), Playroom.RPC.Mode.ALL)
+	_attack(punch_damage, 0.7)
 	
 func _do_hook(): 
 	_travel("Hook")
-	var payload = { "damage": hook_damage }
-	Playroom.RPC.call("hook", JSON.print(payload), Playroom.RPC.Mode.ALL)
+	_velocity.x = 0
+	_velocity.z = 0
+	_move_lock_time = 0.4
+	_attack_type   = "hook"
+	Playroom.RPC.call("hook", JSON.print({}), Playroom.RPC.Mode.ALL)
+	_attack(hook_damage, 1.3)
 	
+
+func _attack(damage_amount: int, duration: float = 0.2) -> void:
+	_attack_damage = damage_amount
+	_attack_active = true
+	# automatically turn it off after duration seconds
+	yield(get_tree().create_timer(duration), "timeout")
+	_attack_active = false
+
 func remote_apply_damage(amount:int) -> void:
 	health = max(health - amount, 0)
 	emit_signal("health_changed", health)
 	if health <= 0:
 		_travel("Death")
-	else:
-		_travel("Hit")
+	# no more _travel("Hit") here
 
-		
-func remote_apply_knockback(dir:Vector3, force:float) -> void:
+func remote_apply_knockback(dir:Vector3, force:float, anim:String="KnockBack") -> void:
 	_kb_vel   = dir * force
 	_kb_timer = 0.3
-	_travel("Knockback")   # or "Stagger"
+	_travel(anim)      # now uses whatever anim you passed in
+
+func _begin_jump() -> void:
+	# same as local: start your physics timer + anim
+	_velocity.y = jump_speed
+	_jump_timer = JUMP_DURATION
+	_travel("Jump")
 
 
 func _begin_roll(data: Dictionary) -> void:
