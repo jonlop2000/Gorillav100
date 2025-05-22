@@ -1,5 +1,6 @@
 extends Node
-
+signal player_ready_changed(id, is_ready)
+signal match_started
 # ---------------------------------------------------------------------#
 #  Playroom bridge & constants                                         #
 # ---------------------------------------------------------------------#
@@ -11,13 +12,14 @@ const BOSS_SEND_RATE    = 0.10      # 10 Hz
 # Packed scene for avatars
 const PLAYER_SCENE : PackedScene = preload("res://scenes/player.tscn")
 const PLAYER_HUD_SCENE : PackedScene = preload("res://scenes/PlayerHUD.tscn")
+const PLAYROOM_GAME_ID := "I2okszCMAwuMeW4fxFGD"
 
 # ---------------------------------------------------------------------#
 #  State                                                               #
 # ---------------------------------------------------------------------#
 var players   := {}  # id → { state, node, joy? }
 var boss_node : Node = null
-
+var has_started  = false
 # timers
 var _accum_player := 0.0
 var _accum_boss   := 0.0
@@ -38,31 +40,26 @@ func _bridge(method:String):
 	return cb
 
 func _spawn_player(state):
-	var inst : Node = PLAYER_SCENE.instance()
-	inst.name = "player_%s" % state.id
+	var inst = PLAYER_SCENE.instance()          # ❶  use “=” in Godot 3
+	var base_name = "player_%s" % state.id
+	inst.name = _make_unique_name(base_name)    # no collision now
 	_players_root.add_child(inst)
 	inst.add_to_group("players")
-
-	# Colour tint (optional)
 	var col = state.getProfile().color.hexString if state.getProfile() else "#FFFFFF"
 	if inst.has_method("set_player_color"):
 		inst.set_player_color(ColorN(col))
-
-	# tell it who's local vs. remote
 	if str(state.id) == str(Playroom.me().id):
 		inst.make_local()
-		# ────────────── HUD for the local player ──────────────
-		var hud = PLAYER_HUD_SCENE.instance()
-		# this assumes your HUD script has an `export(NodePath) var player_path`
-		hud.player_path = inst.get_path()
-		var ui_parent = get_tree().get_root().get_node("arena/UI")
-		ui_parent.add_child(hud)
+		_create_hud_for(inst)
 	else:
 		inst.make_remote()
-
 	print("%s spawned – local=%s" % [inst.name, inst.is_local])
 	return inst
 
+func _create_hud_for(player_node):
+	var hud := PLAYER_HUD_SCENE.instance()
+	hud.player_path = player_node.get_path()
+	get_tree().get_root().get_node("arena/UI").add_child(hud)
 
 
 func _spawn_boss():
@@ -105,10 +102,14 @@ func _ready():
 	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
 	Playroom.RPC.register("jump", _bridge("_on_player_jump"))
 	Playroom.RPC.register("show_hit_effects", _bridge("_on_show_hit_effects"))
-
+	Playroom.onPlayerStateChange(_bridge("_on_state_change"))
+	Playroom.onStateChange("matchStarted", _bridge("_on_match_started"))
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
-		opts.gameId = "I2okszCMAwuMeW4fxFGD"
+		opts.gameId = PLAYROOM_GAME_ID
+		opts.discord = true
+		opts.persistentMode = true 
+		opts.skipLobby = false  
 		Playroom.insertCoin(opts, _bridge("_on_insert_coin"))
 	else:
 		# editor debug: spawn one local player + boss
@@ -118,6 +119,14 @@ func _ready():
 		local_node.make_local()  
 		players["LOCAL"] = { "state": dummy_state, "node": local_node }
 		boss_node = _spawn_boss()
+		
+func _make_unique_name(base: String) -> String:
+	var name = base
+	var n = 1
+	while _players_root.has_node(name):
+		name = "%s_%d" % [base, n]
+		n += 1
+	return name
 
 func _on_punch(args:Array) -> void:
 	# ── play the punch animation for other clients ──
@@ -223,44 +232,82 @@ func _on_player_jump(args:Array) -> void:
 #  Lobby / join / quit                                                 #
 # ---------------------------------------------------------------------#
 func _on_insert_coin(_args):
-	# 1) register future join events
+	# 1. register player join/quit callbacks
 	Playroom.onPlayerJoin(_bridge("_on_player_join"))
-	# 2) force-spawn *your* player
+	
+	# 2. record *my* state in the dictionary (no node yet)
 	var me_state = Playroom.me()
-	var me_id    = str(me_state.id)
-	if not players.has(me_id):
-		var me_node = _spawn_player(me_state)   # calls make_local() internally
-		players[me_id] = { "state": me_state, "node": me_node }
-	# 3) spawn boss & push the room snapshot (host only)
-	if boss_node == null:
-		boss_node = _spawn_boss()
-		boss_node._test_freeze = true
-	# host pushes the real boss state
+	players[str(me_state.id)] = { "state": me_state, "node": null }
+	# 3. host pre-loads boss data for later snapshot (no node yet)
 	if Playroom.isHost():
-		Playroom.setState("boss", JSON.print(_pack_boss()))
-		_push_room_init_snapshot()
+		# pre-initialize boss health / phase variables if you need
+		pass
+	# 4. late-joiners: consume host snapshot so our players dict is complete
+	var snap_json = Playroom.getState("room.init")
+	if snap_json:
+		var snap = JSON.parse(snap_json).result
+		for id in snap.players.keys():
+			if not players.has(id):
+				players[id] = { "state": Playroom.getPlayer(id), "node": null }
+	# Ready for lobby UI — emit a custom signal if you like
+	emit_signal("insert_coin_ready")            # optional
 
 func _on_player_join(args):
-	var state = args[0]
-	var id    = str(state.id)
-	# skip yourself (you already spawned in _on_insert_coin)
-	if id == str(Playroom.me().id):
+	var st = args[0]
+	var id = str(st.id)
+	if players.has(id):          
 		return
-	# spawn everyone else as remote
-	var node = _spawn_player(state)
-	players[id] = { "state": state, "node": node }
-	# late-joiners: if boss already exists on host, spawn placeholder
-	if not boss_node and not Playroom.isHost():
-		boss_node = _spawn_boss()
-	# wire up quit handling
-	state.onQuit(_bridge("_on_player_quit"))
+	players[id] = { "state": st, "node": null }
+	emit_signal("player_joined", id)   # optional for lobby updates
+	
+	st.onQuit(_bridge("_on_player_quit"))
 
 func _on_player_quit(args):
-	var state = args[0]
-	var id    = str(state.id)
+	var st = args[0]
+	var id = str(st.id)
 	if players.has(id):
-		players[id].node.queue_free()
+		if players[id].node:
+			players[id].node.queue_free()
 		players.erase(id)
+		emit_signal("player_left", id)
+
+func _on_state_change(args):
+	var st = args[0]
+	emit_signal("player_ready_changed", str(st.id), st.get("ready") == true)
+
+func _on_match_started(value):
+	if value == true or value == "true":
+		emit_signal("match_started")
+
+# called by Arena scene once it loads
+func start_match():
+	if has_started:
+		return
+	has_started = true
+	# 1. spawn every player we have in the dictionary
+	for id in players.keys():
+		if players[id].node == null:
+			var node = _spawn_player(players[id].state)
+			players[id].node = node 
+	# 2. host spawns the boss and broadcasts snapshot
+	if Playroom.isHost():
+		if boss_node == null:
+			boss_node = _spawn_boss()
+		boss_node._test_freeze = false          # unfreeze AI
+		_push_room_init_snapshot()              # pack & setState("room.init", …)   
+	# 3. non-hosts consume the boss snapshot if they don’t have the node yet
+	if not Playroom.isHost() and boss_node == null:
+		boss_node = _spawn_boss()   
+	print("Match started – players:", players.size())
+
+func _send_room_init_snapshot():
+	var snapshot := {
+		"boss"   : _pack_boss(),
+		"players": {}
+	}
+	for id in players.keys():
+		snapshot.players[id] = _pack_player(players[id].node)
+	Playroom.setState("room.init", JSON.print(snapshot))
 
 # ---------------------------------------------------------------------#
 #  Room initialisation snapshot (host)                                 #
