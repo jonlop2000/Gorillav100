@@ -23,6 +23,8 @@ var players   := {}  # id → { state, node, joy? }
 var boss_node : Node = null
 var _ready_cache := {} #id->bool
 var _game_started := false
+var _last_force_start := false
+var _joined_room := false
 
 # timers
 var _accum_player := 0.0
@@ -260,6 +262,8 @@ func _on_insert_coin(_args):
 		_on_became_host()
 	else:
 		_on_lost_host()
+	_last_force_start = (Playroom.getState("force_start") == true)
+	_joined_room      = true
 	_goto_lobby()
 
 
@@ -302,19 +306,21 @@ func start_game():
 	if _game_started:
 		return
 	_game_started = true
-	# 1) Switch to the Arena scene
 	get_tree().change_scene_to(ARENA_SCENE)
 	yield(get_tree(), "idle_frame")
 	_hook_scene_paths()
-	# 2) Spawn all players (local + remote)
+	# spawn all players...
 	for id in players.keys():
 		var entry = players[id]
 		if entry.node == null:
 			entry.node = _spawn_player(entry.state)
-			print("player_%s spawned – local=%s" % [str(entry.state.id), str(entry.node.is_local)])
-	# 3) Spawn exactly one boss instance
+	# spawn boss once
 	if boss_node == null:
 		boss_node = _spawn_boss()
+	# ── NEW: reset the global "force_start" flag on the host ──
+	if Playroom.isHost():
+		Playroom.setState("force_start", false, true)
+
 
 
 func _hook_scene_paths():
@@ -553,6 +559,8 @@ func _on_lost_host():
 	# stop_match_timer()
 
 func _poll_lobby_state():
+	if not _joined_room or _game_started:
+		return
 	for state in get_player_states():
 		var id  = str(state.id)
 		_ready_cache[id] = state.getState("ready") == true
@@ -561,7 +569,7 @@ func _poll_lobby_state():
 	if Playroom.isHost() and _all_ready():
 		Playroom.setState("force_start", true, true)
 
-	# detect force‐start and switch scenes
-	if Playroom.getState("force_start") == true:
-		if get_tree().current_scene != ARENA_SCENE:
-			start_game()
+	var now = Playroom.getState("force_start") == true
+	if now and not _last_force_start:
+		start_game()
+	_last_force_start = now
