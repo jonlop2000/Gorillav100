@@ -11,12 +11,13 @@ config_version=4
 [application]
 
 config/name="100v1Gorilla"
-run/main_scene="res://scenes/arena.tscn"
+run/main_scene="res://scenes/Lobby.tscn"
 config/icon="res://icon.png"
 
 [autoload]
 
 PlayroomManager="*res://scripts/playroom_manager.gd"
+LobbyState="res://scripts/lobby_state.gd"
 
 [global]
 

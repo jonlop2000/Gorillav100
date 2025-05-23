@@ -1,10 +1,14 @@
 extends Node
+
 signal player_ready_changed(id, is_ready)
+signal player_joined(id)
+signal player_left(id)
+signal insert_coin_ready()
 signal match_started
 # ---------------------------------------------------------------------#
 #  Playroom bridge & constants                                         #
 # ---------------------------------------------------------------------#
-var Playroom            = JavaScript.get_interface("Playroom")
+var Playroom  = JavaScript.get_interface("Playroom")
 
 const PLAYER_SEND_RATE  = 0.033     # 30 Hz
 const BOSS_SEND_RATE    = 0.10      # 10 Hz
@@ -109,7 +113,7 @@ func _ready():
 		opts.gameId = PLAYROOM_GAME_ID
 		opts.discord = true
 		opts.persistentMode = true 
-		opts.skipLobby = false  
+		opts.skipLobby = true  
 		Playroom.insertCoin(opts, _bridge("_on_insert_coin"))
 	else:
 		# editor debug: spawn one local player + boss
@@ -237,7 +241,7 @@ func _on_insert_coin(_args):
 	
 	# 2. record *my* state in the dictionary (no node yet)
 	var me_state = Playroom.me()
-	players[str(me_state.id)] = { "state": me_state, "node": null }
+	players[str(me_state.id)] = { "state": me_state, "node": null, "ready": false }
 	# 3. host pre-loads boss data for later snapshot (no node yet)
 	if Playroom.isHost():
 		# pre-initialize boss health / phase variables if you need
@@ -248,7 +252,8 @@ func _on_insert_coin(_args):
 		var snap = JSON.parse(snap_json).result
 		for id in snap.players.keys():
 			if not players.has(id):
-				players[id] = { "state": Playroom.getPlayer(id), "node": null }
+				var st = Playroom.getPlayer(id)
+				players[id] = { "state": st, "node": null, "ready": false }
 	# Ready for lobby UI — emit a custom signal if you like
 	emit_signal("insert_coin_ready")            # optional
 
@@ -257,7 +262,7 @@ func _on_player_join(args):
 	var id = str(st.id)
 	if players.has(id):          
 		return
-	players[id] = { "state": st, "node": null }
+	players[str(st.id)] = { "state": st, "node": null, "ready": false }
 	emit_signal("player_joined", id)   # optional for lobby updates
 	
 	st.onQuit(_bridge("_on_player_quit"))
@@ -273,32 +278,34 @@ func _on_player_quit(args):
 
 func _on_state_change(args):
 	var st = args[0]
-	emit_signal("player_ready_changed", str(st.id), st.get("ready") == true)
+	var id = str(st.id)
+	if not players.has(id):
+		return
+	var rdy = st.get("ready") == true
+	players[id].ready = rdy
+	emit_signal("player_ready_changed", id, rdy)
 
-func _on_match_started(value):
-	if value == true or value == "true":
-		emit_signal("match_started")
-
-# called by Arena scene once it loads
-func start_match():
+func _on_match_started(_value):
 	if has_started:
 		return
 	has_started = true
-	# 1. spawn every player we have in the dictionary
+	emit_signal("match_started")
+
+
+# called by Arena scene once it loads
+func start_match():
+	if has_started:                     # guard
+		return
+	has_started = true
+	# spawn local + remote players
 	for id in players.keys():
 		if players[id].node == null:
-			var node = _spawn_player(players[id].state)
-			players[id].node = node 
-	# 2. host spawns the boss and broadcasts snapshot
+			players[id].node = _spawn_player(players[id].state)
+	# host spawns boss & pushes snapshot
 	if Playroom.isHost():
 		if boss_node == null:
 			boss_node = _spawn_boss()
-		boss_node._test_freeze = false          # unfreeze AI
-		_push_room_init_snapshot()              # pack & setState("room.init", …)   
-	# 3. non-hosts consume the boss snapshot if they don’t have the node yet
-	if not Playroom.isHost() and boss_node == null:
-		boss_node = _spawn_boss()   
-	print("Match started – players:", players.size())
+		_push_room_init_snapshot()
 
 func _send_room_init_snapshot():
 	var snapshot := {
