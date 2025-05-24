@@ -9,11 +9,11 @@ func _bridge(method_name: String):
 	_js_refs.append(cb)
 	return cb
 
-onready var _list        := $MarginContainer/VBoxContainer
-onready var _ready_btn   := $ReadyButton
-onready var _start_btn   := $StartButton
-onready var _status_lbl  := $StatusLabel
-var Playroom             := JavaScript.get_interface("Playroom")
+onready var _list := $Card/VBox/PlayerPanel/PlayerList
+onready var _ready_btn := $Card/VBox/BtnRow/ReadyButton
+onready var _start_btn := $Card/VBox/BtnRow/StartButton
+onready var _status_lbl  := $Card/VBox/StatusLabel
+var Playroom := JavaScript.get_interface("Playroom")
 
 var _poll_accum := 0.0
 const POLL_RATE := 0.2

@@ -11,7 +11,7 @@ const BOSS_SEND_RATE    = 0.10      # 10 Hz
 # Packed scene for avatars
 const PLAYER_SCENE : PackedScene = preload("res://scenes/player.tscn")
 const PLAYER_HUD_SCENE : PackedScene = preload("res://scenes/PlayerHUD.tscn")
-const LOBBY_SCENE = preload("res://scenes/Lobby.tscn")
+const LOBBY_SCENE = preload("res://scenes/Lobby3D.tscn")
 const ARENA_SCENE = preload("res://scenes/arena.tscn")
 
 var _state_poll_accum := 0.0
@@ -247,9 +247,6 @@ func _on_player_jump(args:Array) -> void:
 	players[id].node._begin_jump()
 
 
-# ---------------------------------------------------------------------#
-#  Lobby / join / quit                                                 #
-# ---------------------------------------------------------------------#
 # ------------------------------------------------------------------#
 #  Lobby / join / quit                                              #
 # ------------------------------------------------------------------#
@@ -301,6 +298,12 @@ func _goto_lobby():
 	get_tree().change_scene_to(LOBBY_SCENE)
 	yield(get_tree(), "idle_frame")
 	_hook_scene_paths()
+	_show_lobby_panel() 
+	
+
+func _show_lobby_panel():
+	var vc = get_tree().current_scene.get_node("ViewportContainer")
+	if vc: vc.visible = true
 
 func start_game():
 	if _game_started:
@@ -308,6 +311,7 @@ func start_game():
 	_game_started = true
 	get_tree().change_scene_to(ARENA_SCENE)
 	yield(get_tree(), "idle_frame")
+	_hide_lobby_panel() 
 	_hook_scene_paths()
 	# spawn all players...
 	for id in players.keys():
@@ -321,7 +325,9 @@ func start_game():
 	if Playroom.isHost():
 		Playroom.setState("force_start", false, true)
 
-
+func _hide_lobby_panel():
+	var vc = get_tree().current_scene.get_node("ViewportContainer")
+	if vc: vc.visible = false
 
 func _hook_scene_paths():
 	var scene = get_tree().current_scene                # refresh cached roots
