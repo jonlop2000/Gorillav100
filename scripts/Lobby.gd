@@ -39,33 +39,33 @@ func _add_or_update_row(player):
 		row = preload("res://scenes/ui/PlayerRow.tscn").instance()
 		row.name = id
 		_list.add_child(row)
-	row.get_node("Name").text = player.getProfile().name
-	row.get_node("Avatar").texture = _get_avatar(player)
+	var profile = player.getProfile()
+	row.get_node("Name").text = profile.name
+	row.get_node("Avatar").texture = _avatar_from_profile(profile)
 
-# Lobby.gd  – inside the PlayerRow helper
-func _get_avatar(player) -> Texture:
-	var url = null
-	if player != null and player.getProfile():
-		url = player.getProfile().avatarUrl
-	# 1) No URL?  Return fallback texture immediately
-	if url == null or url == "":
-		return preload("res://art/Gorilla.jpg")   #  32×32 placeholder
-	# 2) Normal Discord path – download the avatar
-	var tex  = ImageTexture.new()
-	var http = HTTPRequest.new()
-	add_child(http)
-	var err  = http.request(url)
-	if err != OK:
-		http.queue_free()
-		return preload("res://art/Gorilla.jpg")
-	yield(http, "request_completed")
-	var body  = http.get_response_body()
-	var image = Image.new()
-	if image.load_png_from_buffer(body) != OK:
-		tex = preload("res://art/Gorilla.jpg")
+
+func _avatar_from_profile(profile) -> Texture:
+	var photo : String = profile.photo
+	if photo == null or photo == "":
+		return preload("res://art/default_avatar.jpg")
+
+	# Split only once; ensure we actually got two chunks
+	var arr := photo.split(",", false, 1)
+	if arr.size() < 2:
+		return preload("res://art/default_avatar.jpg")
+
+	var tex := ImageTexture.new()
+	var img := Image.new()
+
+	if photo.begins_with("data:image/svg"):
+		var svg_str : String = String(arr[1].percent_decode())
+		if img.load_svg_from_string(svg_str) != OK:
+			return preload("res://art/default_avatar.jpg")
 	else:
-		tex.create_from_image(image, 0)
-	http.queue_free()
+		var raw : PoolByteArray = Marshalls.base64_to_raw(arr[1])
+		if img.load_png_from_buffer(raw) != OK:
+			return preload("res://art/default_avatar.jpg")
+	tex.create_from_image(img, 0)
 	return tex
 
 

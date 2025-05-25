@@ -1,7 +1,8 @@
-[gd_scene load_steps=8 format=2]
+[gd_scene load_steps=10 format=2]
 
 [ext_resource path="res://scripts/Lobby.gd" type="Script" id=1]
 [ext_resource path="res://fonts/PixelifySans-Regular.ttf" type="DynamicFontData" id=2]
+[ext_resource path="res://scenes/ui/circle_avatar.tres" type="Shader" id=3]
 
 [sub_resource type="StyleBoxFlat" id=12]
 bg_color = Color( 0.07, 0.13, 0.2, 0.9 )
@@ -21,6 +22,9 @@ corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
+
+[sub_resource type="ShaderMaterial" id=15]
+shader = ExtResource( 3 )
 
 [sub_resource type="DynamicFont" id=11]
 size = 24
@@ -81,18 +85,19 @@ custom_constants/separation = 12
 
 [node name="PlayerRowTemplate" type="HBoxContainer" parent="Card/VBox/PlayerPanel/PlayerList"]
 visible = false
+size_flags_horizontal = 3
 custom_constants/separation = 12
 
 [node name="Avatar" type="TextureRect" parent="Card/VBox/PlayerPanel/PlayerList/PlayerRowTemplate"]
+material = SubResource( 15 )
 rect_min_size = Vector2( 40, 40 )
 stretch_mode = 2
 
 [node name="Name" type="Label" parent="Card/VBox/PlayerPanel/PlayerList/PlayerRowTemplate"]
-margin_right = 40.0
-margin_bottom = 14.0
-custom_fonts/font = SubResource( 11 )
+size_flags_horizontal = 3
 
 [node name="StatusBadge" type="Label" parent="Card/VBox/PlayerPanel/PlayerList/PlayerRowTemplate"]
+visible = false
 rect_min_size = Vector2( 60, 24 )
 custom_fonts/font = SubResource( 11 )
 custom_styles/normal = SubResource( 14 )
