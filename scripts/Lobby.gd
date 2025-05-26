@@ -13,11 +13,12 @@ onready var _list := $Card/VBox/PlayerPanel/PlayerList
 onready var _ready_btn := $Card/VBox/BtnRow/ReadyButton
 onready var _start_btn := $Card/VBox/BtnRow/StartButton
 onready var _status_lbl  := $Card/VBox/StatusLabel
+
 var Playroom := JavaScript.get_interface("Playroom")
-
 var _poll_accum := 0.0
+var _avatar_cache := {}  #Dictionary 
+ 
 const POLL_RATE := 0.2
-
 
 func _ready():
 	_start_btn.visible = Playroom.isHost()
@@ -25,48 +26,69 @@ func _ready():
 
 	# build initial roster
 	for p in PlayroomManager.get_player_states():
+		_prefetch_avatar(p)
 		_add_or_update_row(p)
-
 	# wire signals
 	Playroom.onPlayerJoin(_bridge("_on_player_join")) 
 	_ready_btn.connect("pressed", self, "_on_ready_pressed")
 	_start_btn.connect("pressed", self, "_on_start_pressed")
 
-func _add_or_update_row(player):
+func _prefetch_avatar(player):
 	var id  = str(player.id)
-	var row = _list.get_node_or_null(id)
+	if _avatar_cache.has(id):
+		return   # already have it
+
+	var url = player.getProfile().photo
+	if url and url.begins_with("http"):
+		var http = HTTPRequest.new()
+		add_child(http)
+		http.connect("request_completed", self,
+					 "_on_avatar_request_completed", [id, http])
+		http.request(url)
+
+func _add_or_update_row(player):
+	var id   = str(player.id)
+	var row  = _list.get_node_or_null(id)
 	if row == null:
-		row = preload("res://scenes/ui/PlayerRow.tscn").instance()
-		row.name = id
+		# 1) Grab the template in the scene
+		var template = $Card/VBox/PlayerPanel/PlayerList/PlayerRowTemplate
+		# 2) Duplicate it (deep copy), show it, give it the right name
+		row = template.duplicate()
+		row.name    = id
+		row.visible = true
+		# 3) Add it into the list instead of the hidden template
 		_list.add_child(row)
+	# populate fields
 	var profile = player.getProfile()
-	row.get_node("Name").text = profile.name
-	row.get_node("Avatar").texture = _avatar_from_profile(profile)
+	row.get_node("Name").text   = profile.name
 
-
-func _avatar_from_profile(profile) -> Texture:
-	var photo : String = profile.photo
-	if photo == null or photo == "":
-		return preload("res://art/default_avatar.jpg")
-
-	# Split only once; ensure we actually got two chunks
-	var arr := photo.split(",", false, 1)
-	if arr.size() < 2:
-		return preload("res://art/default_avatar.jpg")
-
-	var tex := ImageTexture.new()
-	var img := Image.new()
-
-	if photo.begins_with("data:image/svg"):
-		var svg_str : String = String(arr[1].percent_decode())
-		if img.load_svg_from_string(svg_str) != OK:
-			return preload("res://art/default_avatar.jpg")
+	if _avatar_cache.has(id):
+		row.get_node("Avatar").texture = _avatar_cache[id]
 	else:
-		var raw : PoolByteArray = Marshalls.base64_to_raw(arr[1])
-		if img.load_png_from_buffer(raw) != OK:
-			return preload("res://art/default_avatar.jpg")
+		row.get_node("Avatar").texture = preload("res://art/default_avatar.jpg")
+		_prefetch_avatar(player)   # kick off download if needed
+
+func _on_avatar_request_completed(result, response_code, headers, body, id, http: HTTPRequest):
+	# Always free the node at the end
+	http.queue_free()
+
+	if result != OK or response_code != 200:
+		push_warning("Avatar download failed for " + id)
+		return
+
+	var img = Image.new()
+	if img.load_png_from_buffer(body) != OK:
+		push_warning("Invalid image data for " + id)
+		return
+
+	img.resize(40, 40)
+	var tex = ImageTexture.new()
 	tex.create_from_image(img, 0)
-	return tex
+	_avatar_cache[id] = tex
+
+	var row = _list.get_node_or_null(id)
+	if row:
+		row.get_node("Avatar").texture = tex
 
 
 #------------------------------------------------------------------#
@@ -95,7 +117,9 @@ func _on_start_pressed():
 #  Event listeners                                                  #
 #------------------------------------------------------------------#
 func _on_player_join(args):
-	_add_or_update_row(args[0])
+	var player = args[0]
+	_prefetch_avatar(player)
+	_add_or_update_row(player)
 
 func _on_player_quit(args):
 	var id = str(args[0].id)
