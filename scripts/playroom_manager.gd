@@ -11,23 +11,32 @@ const BOSS_SEND_RATE    = 0.10      # 10 Hz
 # Packed scene for avatars
 const PLAYER_SCENE : PackedScene = preload("res://scenes/player.tscn")
 const PLAYER_HUD_SCENE : PackedScene = preload("res://scenes/PlayerHUD.tscn")
+const LOBBY_SCENE = preload("res://scenes/Lobby3D.tscn")
+const ARENA_SCENE = preload("res://scenes/arena.tscn")
 
+var _state_poll_accum := 0.0
+const STATE_POLL_RATE := 0.2      # seconds
 # ---------------------------------------------------------------------#
 #  State                                                               #
 # ---------------------------------------------------------------------#
 var players   := {}  # id → { state, node, joy? }
 var boss_node : Node = null
+var _ready_cache := {} #id->bool
+var _game_started := false
+var _last_force_start := false
+var _joined_room := false
 
 # timers
 var _accum_player := 0.0
 var _accum_boss   := 0.0
 
+# root holders are updated every time we switch scenes
+var _players_root : Node = null
+var _ui_root      : Node = null
+var _boss_parent  : Node = null
 # keep JS callbacks alive
 var _js_refs := []
 
-# cached node look‑ups
-onready var _players_root = get_tree().get_root().get_node("arena/Players")
-onready var _boss_parent  = get_tree().get_root().get_node("arena/Navigation/NavigationMeshInstance/GridMap/Boss")
 
 # ---------------------------------------------------------------------#
 #  Helpers                                                             #
@@ -38,40 +47,49 @@ func _bridge(method:String):
 	return cb
 
 func _spawn_player(state):
-	var inst : Node = PLAYER_SCENE.instance()
+	var inst = PLAYER_SCENE.instance()
 	inst.name = "player_%s" % state.id
 	_players_root.add_child(inst)
 	inst.add_to_group("players")
 
-	# Colour tint (optional)
-	var col = state.getProfile().color.hexString if state.getProfile() else "#FFFFFF"
-	if inst.has_method("set_player_color"):
-		inst.set_player_color(ColorN(col))
-
-	# tell it who's local vs. remote
 	if str(state.id) == str(Playroom.me().id):
 		inst.make_local()
-		# ────────────── HUD for the local player ──────────────
+		# HUD
 		var hud = PLAYER_HUD_SCENE.instance()
-		# this assumes your HUD script has an `export(NodePath) var player_path`
 		hud.player_path = inst.get_path()
-		var ui_parent = get_tree().get_root().get_node("arena/UI")
-		ui_parent.add_child(hud)
+		if _ui_root:
+			_ui_root.add_child(hud)
 	else:
 		inst.make_remote()
+		# apply any existing position/rotation from state
+		var px = state.getState("px")
+		if px != null:
+			var py = state.getState("py")
+			var pz = state.getState("pz")
+			inst.global_transform.origin = Vector3(px, py, pz)
+		var rot = state.getState("rot")
+		if rot != null:
+			inst.rotation.y = rot
 
 	print("%s spawned – local=%s" % [inst.name, inst.is_local])
 	return inst
 
 
+	print("%s spawned – local=%s" % [inst.name, inst.is_local])
+	return inst
 
 func _spawn_boss():
 	var scene = preload("res://scenes/gorilla_boss.tscn")
 	var inst  = scene.instance()
-	inst.is_host = Playroom.isHost()   # ← add this line
-	print("Spawning boss - is_host:", inst.is_host)  # Debug log
-	_boss_parent.add_child(inst)
+	inst.is_host = Playroom.isHost()
+	print("Spawning boss - is_host:", inst.is_host)
+
+	if _boss_parent:
+		_boss_parent.add_child(inst)
+	else:
+		push_error("Cannot spawn boss: _boss_parent is null!")
 	return inst
+
 
 func _pack_player(node:Node) -> Dictionary:
 	return {
@@ -109,6 +127,8 @@ func _ready():
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
 		opts.gameId = "I2okszCMAwuMeW4fxFGD"
+		opts.discord = true
+		opts.skipLobby = true
 		Playroom.insertCoin(opts, _bridge("_on_insert_coin"))
 	else:
 		# editor debug: spawn one local player + boss
@@ -118,6 +138,14 @@ func _ready():
 		local_node.make_local()  
 		players["LOCAL"] = { "state": dummy_state, "node": local_node }
 		boss_node = _spawn_boss()
+
+# Returns an Array of the current PlayerState objects
+func get_player_states() -> Array:
+	var out := []
+	for id in players.keys():
+		out.append(players[id]["state"])
+	return out
+
 
 func _on_punch(args:Array) -> void:
 	# ── play the punch animation for other clients ──
@@ -219,48 +247,123 @@ func _on_player_jump(args:Array) -> void:
 	players[id].node._begin_jump()
 
 
-# ---------------------------------------------------------------------#
-#  Lobby / join / quit                                                 #
-# ---------------------------------------------------------------------#
+# ------------------------------------------------------------------#
+#  Lobby / join / quit                                              #
+# ------------------------------------------------------------------#
 func _on_insert_coin(_args):
-	# 1) register future join events
+	# 1) register the only Playroom callback we still need
 	Playroom.onPlayerJoin(_bridge("_on_player_join"))
-	# 2) force-spawn *your* player
-	var me_state = Playroom.me()
-	var me_id    = str(me_state.id)
-	if not players.has(me_id):
-		var me_node = _spawn_player(me_state)   # calls make_local() internally
-		players[me_id] = { "state": me_state, "node": me_node }
-	# 3) spawn boss & push the room snapshot (host only)
-	if boss_node == null:
-		boss_node = _spawn_boss()
-		boss_node._test_freeze = true
-	# host pushes the real boss state
-	if Playroom.isHost():
-		Playroom.setState("boss", JSON.print(_pack_boss()))
-		_push_room_init_snapshot()
+	# 2) seed local host-status cache and run the appropriate hook once
+	_cached_is_host = Playroom.isHost()
+	if _cached_is_host:
+		_on_became_host()
+	else:
+		_on_lost_host()
+	_last_force_start = (Playroom.getState("force_start") == true)
+	_joined_room      = true
+	_goto_lobby()
+
 
 func _on_player_join(args):
-	var state = args[0]
+	var state = args[0]                   # the PlayerState that just joined
 	var id    = str(state.id)
-	# skip yourself (you already spawned in _on_insert_coin)
-	if id == str(Playroom.me().id):
-		return
-	# spawn everyone else as remote
-	var node = _spawn_player(state)
-	players[id] = { "state": state, "node": node }
-	# late-joiners: if boss already exists on host, spawn placeholder
-	if not boss_node and not Playroom.isHost():
-		boss_node = _spawn_boss()
-	# wire up quit handling
-	state.onQuit(_bridge("_on_player_quit"))
+	# Only set up once
+	if not players.has(id):
+		# 1) track their PlayerState and leave a slot for the Node
+		players[id]       = { "state": state, "node": null }
+		_ready_cache[id]  = false
+	# 2) If we’re already in the Arena, spawn them immediately
+	if _players_root and players[id].node == null:
+		var node = _spawn_player(state)
+		players[id].node = node
+
 
 func _on_player_quit(args):
 	var state = args[0]
 	var id    = str(state.id)
-	if players.has(id):
+	# remove ready flag
+	_ready_cache.erase(id)
+	# free node if it exists
+	if players.has(id) and is_instance_valid(players[id].node):
 		players[id].node.queue_free()
-		players.erase(id)
+	# remove the player entry
+	players.erase(id)
+
+# ------------------------------------------------------------------#
+#  Scene helpers                                                    #
+# ------------------------------------------------------------------#
+func _goto_lobby():
+	if get_tree().current_scene == LOBBY_SCENE:
+		return          # already there, no reload
+	get_tree().change_scene_to(LOBBY_SCENE)
+	yield(get_tree(), "idle_frame")
+	_hook_scene_paths()
+	_show_lobby_panel() 
+	
+
+func _show_lobby_panel():
+	var vc = get_tree().current_scene.get_node("ViewportContainer")
+	if vc: vc.visible = true
+
+func start_game():
+	if _game_started:
+		return
+	_game_started = true
+	get_tree().change_scene_to(ARENA_SCENE)
+	yield(get_tree(), "idle_frame")
+	_hide_lobby_panel() 
+	_hook_scene_paths()
+	# spawn all players...
+	for id in players.keys():
+		var entry = players[id]
+		if entry.node == null:
+			entry.node = _spawn_player(entry.state)
+	# spawn boss once
+	if boss_node == null:
+		boss_node = _spawn_boss()
+	# ── NEW: reset the global "force_start" flag on the host ──
+	if Playroom.isHost():
+		Playroom.setState("force_start", false, true)
+
+func _hide_lobby_panel():
+	var vc = get_tree().current_scene.get_node("ViewportContainer")
+	if vc: vc.visible = false
+
+func _hook_scene_paths():
+	var scene = get_tree().current_scene                # refresh cached roots
+	if scene.has_node("Players"):
+		_players_root = scene.get_node("Players")
+	if scene.has_node("UI"):
+		_ui_root = scene.get_node("UI")
+	var boss_path = "Navigation/NavigationMeshInstance/GridMap/Boss"
+	if scene.has_node(boss_path):
+		_boss_parent = scene.get_node(boss_path)
+	else:
+		_boss_parent = null
+		_boss_parent = null
+
+# ------------------------------------------------------------------#
+#  Ready / start logic                                              #
+# ------------------------------------------------------------------#
+func _on_ready_state(args):
+	var p      = args[0]        # Player object
+	var is_rdy = args[1]        # bool
+	_ready_cache[str(p.id)] = is_rdy
+	# host: auto-start when everyone ready
+	if Playroom.isHost() and _all_ready():
+		_broadcast_force_start()
+
+func _on_force_start(_args):
+	# anyone receiving this just loads the arena
+	start_game()
+
+func _broadcast_force_start():
+	Playroom.setState("force_start", true)
+
+func _all_ready() -> bool:
+	for v in _ready_cache.values():
+		if not v: return false
+	return true
 
 # ---------------------------------------------------------------------#
 #  Room initialisation snapshot (host)                                 #
@@ -292,6 +395,11 @@ func _physics_process(delta):
 				var entry = players[id]
 				var node  = entry.node
 				var state = entry.state
+
+				if node == null or not is_instance_valid(node):
+					# clean up so future loops don’t see it
+					entry.node = null
+					continue
 
 				# 1) publish your own state
 				if node.is_local:
@@ -388,14 +496,86 @@ func _on_boss_health(args):
 		boss_node.set("health", args[0])
 
 # ---------------------------------------------------------------------#
-#  Event subscriptions (clients)                                       #
-# ---------------------------------------------------------------------#
-#func _register_boss_listeners():
-#	if Playroom.isHost(): return      # host does its own thing
-#	Playroom.onState("boss", _bridge("_on_boss_state"))
-
-# ---------------------------------------------------------------------#
 #  Clean‑up                                                            #
 # ---------------------------------------------------------------------#
 func _exit_tree():
 	_js_refs.clear()
+
+var _cached_is_host := false
+
+func _process(delta):
+	_state_poll_accum += delta
+	if _state_poll_accum >= STATE_POLL_RATE:
+		_state_poll_accum -= STATE_POLL_RATE
+		_check_host_change()
+		_poll_lobby_state()   # the ready-state poll you already have
+
+func _check_host_change():
+	if Playroom == null:
+		return
+	var now_is_host = Playroom.isHost()
+	if now_is_host != _cached_is_host:
+		_cached_is_host = now_is_host
+		if now_is_host:
+			print("⚡ Host migrated to ME")
+			# promote authority (e.g., enable boss AI, allow Start button)
+			_on_became_host()
+		else:
+			print("⚡ Another player became host")
+			# disable host-only systems here
+			_on_lost_host()
+
+func _on_became_host():
+	print("⚡ I am now host")
+
+	# 1) Lobby UI — show the Start button
+	if get_tree().current_scene == LOBBY_SCENE and _ui_root:
+		var btn = _ui_root.get_node_or_null("StartButton")
+		if btn:
+			btn.visible  = true
+			btn.disabled = ! _all_ready()    # enable only if everyone ready
+
+	# 2) Arena — ensure boss exists and set authority
+	if get_tree().current_scene == ARENA_SCENE:
+		if boss_node == null and _boss_parent:
+			boss_node = _spawn_boss()
+		if boss_node:
+			boss_node.is_host = true      # your own flag
+			boss_node.activate_ai()       # example host-only task
+
+	# 3) Any other host-only systems (timers, match clock, etc.)
+	# start_match_timer()
+
+# -------------------------------------------------
+func _on_lost_host():
+	print("⚡ I am no longer host")
+
+	# 1) Lobby UI — hide the Start button
+	if get_tree().current_scene == LOBBY_SCENE and _ui_root:
+		var btn = _ui_root.get_node_or_null("StartButton")
+		if btn:
+			btn.visible = false
+
+	# 2) Arena — relinquish boss authority
+	if boss_node:
+		boss_node.is_host = false
+		boss_node.deactivate_ai()         # stop host-only logic
+
+	# 3) Stop or pause any host-only timers you own
+	# stop_match_timer()
+
+func _poll_lobby_state():
+	if not _joined_room or _game_started:
+		return
+	for state in get_player_states():
+		var id  = str(state.id)
+		_ready_cache[id] = state.getState("ready") == true
+
+	# auto‐start when host sees everyone ready
+	if Playroom.isHost() and _all_ready():
+		Playroom.setState("force_start", true, true)
+
+	var now = Playroom.getState("force_start") == true
+	if now and not _last_force_start:
+		start_game()
+	_last_force_start = now
