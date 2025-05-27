@@ -34,9 +34,9 @@ var _accum_boss   := 0.0
 var _players_root : Node = null
 var _ui_root      : Node = null
 var _boss_parent  : Node = null
+var lobby_panel: Control = null
 # keep JS callbacks alive
 var _js_refs := []
-
 
 # ---------------------------------------------------------------------#
 #  Helpers                                                             #
@@ -246,37 +246,46 @@ func _on_player_jump(args:Array) -> void:
 	# tell that player to go into the Jump state
 	players[id].node._begin_jump()
 
-
 # ------------------------------------------------------------------#
 #  Lobby / join / quit                                              #
 # ------------------------------------------------------------------#
 func _on_insert_coin(_args):
-	# 1) register the only Playroom callback we still need
+	# 1) register for future joins
 	Playroom.onPlayerJoin(_bridge("_on_player_join"))
-	# 2) seed local host-status cache and run the appropriate hook once
+	# 2) seed local host‐status cache...
 	_cached_is_host = Playroom.isHost()
 	if _cached_is_host:
 		_on_became_host()
 	else:
 		_on_lost_host()
 	_last_force_start = (Playroom.getState("force_start") == true)
-	_joined_room      = true
+	_joined_room = true
+
+	# ——————— NEW: pre‐fetch every current avatar ———————
+	for state in get_player_states():
+		var id  = str(state.id)
+		var url = state.getProfile().photo
+		if url.begins_with("http"):
+			AvatarCache.fetch(id, url)
+	# ————————————————————————————————————————————————
+
+	# 3) finally go show the lobby UI
 	_goto_lobby()
 
-
 func _on_player_join(args):
-	var state = args[0]                   # the PlayerState that just joined
+	var state = args[0]
 	var id    = str(state.id)
-	# Only set up once
+
+	var url = state.getProfile().photo
+	if url.begins_with("http"):
+		AvatarCache.fetch(id, url)
+
 	if not players.has(id):
-		# 1) track their PlayerState and leave a slot for the Node
-		players[id]       = { "state": state, "node": null }
-		_ready_cache[id]  = false
-	# 2) If we’re already in the Arena, spawn them immediately
+		players[id] = { "state": state, "node": null }
+		_ready_cache[id] = false
 	if _players_root and players[id].node == null:
 		var node = _spawn_player(state)
 		players[id].node = node
-
 
 func _on_player_quit(args):
 	var state = args[0]
@@ -300,10 +309,13 @@ func _goto_lobby():
 	_hook_scene_paths()
 	_show_lobby_panel() 
 	
+func register_lobby_panel(panel: Control):
+	lobby_panel = panel
+	lobby_panel.visible = false
 
 func _show_lobby_panel():
-	var vc = get_tree().current_scene.get_node("ViewportContainer")
-	if vc: vc.visible = true
+	if lobby_panel:
+		lobby_panel.visible = true
 
 func start_game():
 	if _game_started:
@@ -326,8 +338,8 @@ func start_game():
 		Playroom.setState("force_start", false, true)
 
 func _hide_lobby_panel():
-	var vc = get_tree().current_scene.get_node("ViewportContainer")
-	if vc: vc.visible = false
+	if lobby_panel:
+		lobby_panel.visible = false
 
 func _hook_scene_paths():
 	var scene = get_tree().current_scene                # refresh cached roots
