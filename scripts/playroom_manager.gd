@@ -250,27 +250,28 @@ func _on_player_jump(args:Array) -> void:
 #  Lobby / join / quit                                              #
 # ------------------------------------------------------------------#
 func _on_insert_coin(_args):
-	# 1) register for future joins
+	# 1) Register for future roster changes *first*
 	Playroom.onPlayerJoin(_bridge("_on_player_join"))
-	# 2) seed local host‐status cache...
+	# 2) Seed the roster with *yourself* immediately
+	var me_state = Playroom.me()
+	if me_state:
+		_on_player_join([me_state])          # reuse existing handler
+	# 3) Cache host flag & other room-level state
 	_cached_is_host = Playroom.isHost()
 	if _cached_is_host:
 		_on_became_host()
 	else:
 		_on_lost_host()
-	_last_force_start = (Playroom.getState("force_start") == true)
-	_joined_room = true
-
-	# ——————— NEW: pre‐fetch every current avatar ———————
+	_last_force_start = Playroom.getState("force_start") == true
+	_joined_room      = true
+	# 4) Prefetch avatars for everyone currently in `players`
 	for state in get_player_states():
-		var id  = str(state.id)
 		var url = state.getProfile().photo
-		if url.begins_with("http"):
-			AvatarCache.fetch(id, url)
-	# ————————————————————————————————————————————————
-
-	# 3) finally go show the lobby UI
+		if url and url.begins_with("http"):
+			AvatarCache.fetch(str(state.id), url)
+	# 5) Finally load the lobby scene
 	_goto_lobby()
+
 
 func _on_player_join(args):
 	var state = args[0]

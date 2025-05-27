@@ -13,6 +13,7 @@ onready var _list := $Card/VBox/PlayerPanel/PlayerList
 onready var _ready_btn := $Card/VBox/BtnRow/ReadyButton
 onready var _start_btn := $Card/VBox/BtnRow/StartButton
 onready var _status_lbl  := $Card/VBox/StatusLabel
+onready var _template := $Card/VBox/PlayerPanel/PlayerList/PlayerRowTemplate
 
 var Playroom := JavaScript.get_interface("Playroom")
 var _poll_accum := 0.0
@@ -20,7 +21,7 @@ var _poll_accum := 0.0
 const POLL_RATE := 0.2
 
 func _ready():
-	$Card/VBox/PlayerPanel/PlayerList/PlayerRowTemplate.visible = false
+	_template.visible = false    
 	# 1) Ensure we only ever connect once
 	if not AvatarCache.is_connected("avatar_ready", self, "_on_avatar_ready"):
 		AvatarCache.connect("avatar_ready", self, "_on_avatar_ready")
@@ -37,24 +38,18 @@ func _ready():
 	_start_btn.connect("pressed", self, "_on_start_pressed")
 
 func _add_or_update_row(player):
-	var id   = str(player.id)
-	var row  = _list.get_node_or_null(id)
+	var id  = str(player.id)
+	var row = _list.get_node_or_null(id)
 	if row == null:
-		var template = $Card/VBox/PlayerPanel/PlayerList/PlayerRowTemplate
-		if template.name == "PlayerRowTemplate" and not template.visible:
-			# first player takes over the template node
-			row = template
-		else:
-			# for every other player, duplicate
-			row = template.duplicate()
-			_list.add_child(row)
+		row = _template.duplicate()
 		row.name    = id
 		row.visible = true
 		row.get_node("Avatar").visible = false
+		_list.add_child(row)
+
 	row.get_node("Name").text = player.getProfile().name
 	if AvatarCache.has(id):
 		_apply_avatar(id, row)
-
 
 func _on_avatar_ready(player_id: String):
 	var row = _list.get_node_or_null(player_id)
