@@ -115,15 +115,8 @@ func _process(delta):
 	if _poll_accum >= POLL_RATE:
 		_poll_accum -= POLL_RATE
 		_refresh_player_rows()
-		_check_force_start()
 
 func _refresh_player_rows():
 	for p in PlayroomManager.get_player_states():
 		_add_or_update_row(p)
 
-func _check_force_start():
-	if Playroom.getState("force_start") == true:
-		# avoid double-start
-		if get_tree().current_scene.filename != "res://scenes/Arena.tscn":
-			PlayroomManager.start_game()
-		

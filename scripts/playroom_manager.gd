@@ -14,6 +14,9 @@ const PLAYER_HUD_SCENE : PackedScene = preload("res://scenes/PlayerHUD.tscn")
 const LOBBY_SCENE = preload("res://scenes/Lobby3D.tscn")
 const ARENA_SCENE = preload("res://scenes/arena.tscn")
 
+onready var _cd_label := get_node_or_null("/root/arena/UI/CountdownContainer/CountdownLabel")
+var _cd  := 5
+
 var _state_poll_accum := 0.0
 const STATE_POLL_RATE := 0.2      # seconds
 # ---------------------------------------------------------------------#
@@ -29,6 +32,8 @@ var _joined_room := false
 # timers
 var _accum_player := 0.0
 var _accum_boss   := 0.0
+var start_timer : Timer
+var end_timer : Timer
 
 # root holders are updated every time we switch scenes
 var _players_root : Node = null
@@ -115,7 +120,7 @@ func _pack_boss() -> Dictionary:
 # ---------------------------------------------------------------------#
 #  Boot                                                                #
 # ---------------------------------------------------------------------#
-func _ready():
+func _ready():	
 	JavaScript.eval("")   # initialise bridge
 	Playroom.RPC.register("punch", _bridge("_on_punch"))
 	Playroom.RPC.register("hook", _bridge("_on_hook"))
@@ -123,7 +128,22 @@ func _ready():
 	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
 	Playroom.RPC.register("jump", _bridge("_on_player_jump"))
 	Playroom.RPC.register("show_hit_effects", _bridge("_on_show_hit_effects"))
+	
+	#--Round Timers--------------------------------------------------------
+	start_timer = Timer.new()
+	start_timer.name = "StartTimer"
+	start_timer.one_shot = true
+	start_timer.wait_time = 3.0
+	add_child(start_timer)
+	start_timer.connect("timeout", self, "_on_start_timer_timeout")
 
+	end_timer = Timer.new()
+	end_timer.name = "EndTimer"
+	end_timer.one_shot = true
+	end_timer.wait_time = 5.0         # 5-sec results screen
+	add_child(end_timer)
+	end_timer.connect("timeout", self, "_on_end_timer_timeout")
+   # ---------------------------------------------------------------------
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
 		opts.gameId = "I2okszCMAwuMeW4fxFGD"
@@ -250,13 +270,17 @@ func _on_player_jump(args:Array) -> void:
 #  Lobby / join / quit                                              #
 # ------------------------------------------------------------------#
 func _on_insert_coin(_args):
-	# 1) Register for future roster changes *first*
+	_game_started = false          # ← reset for next round
+
+	# 1) Register for future roster changes
 	Playroom.onPlayerJoin(_bridge("_on_player_join"))
-	# 2) Seed the roster with *yourself* immediately
+
+	# 2) Seed roster with yourself
 	var me_state = Playroom.me()
 	if me_state:
-		_on_player_join([me_state])          # reuse existing handler
-	# 3) Cache host flag & other room-level state
+		_on_player_join([me_state])
+
+	# 3) Cache host flag & other room state
 	_cached_is_host = Playroom.isHost()
 	if _cached_is_host:
 		_on_became_host()
@@ -264,14 +288,15 @@ func _on_insert_coin(_args):
 		_on_lost_host()
 	_last_force_start = Playroom.getState("force_start") == true
 	_joined_room      = true
-	# 4) Prefetch avatars for everyone currently in `players`
+
+	# 4) Prefetch avatars
 	for state in get_player_states():
 		var url = state.getProfile().photo
 		if url and url.begins_with("http"):
 			AvatarCache.fetch(str(state.id), url)
-	# 5) Finally load the lobby scene
-	_goto_lobby()
 
+	# 5) Load lobby
+	_goto_lobby()
 
 func _on_player_join(args):
 	var state = args[0]
@@ -522,6 +547,7 @@ func _process(delta):
 		_state_poll_accum -= STATE_POLL_RATE
 		_check_host_change()
 		_poll_lobby_state()   # the ready-state poll you already have
+		_poll_force_start()
 
 func _check_host_change():
 	if Playroom == null:
@@ -569,26 +595,65 @@ func _on_lost_host():
 		if btn:
 			btn.visible = false
 
-	# 2) Arena — relinquish boss authority
 	if boss_node:
 		boss_node.is_host = false
-		boss_node.deactivate_ai()         # stop host-only logic
-
-	# 3) Stop or pause any host-only timers you own
-	# stop_match_timer()
+		boss_node.deactivate_ai()        
 
 func _poll_lobby_state():
 	if not _joined_room or _game_started:
 		return
-	for state in get_player_states():
-		var id  = str(state.id)
-		_ready_cache[id] = state.getState("ready") == true
 
-	# auto‐start when host sees everyone ready
-	if Playroom.isHost() and _all_ready():
+	# 1) Refresh ready cache
+	for state in get_player_states():
+		_ready_cache[str(state.id)] = state.getState("ready") == true
+
+	# 2) If host and everyone ready, set the flag once
+	if Playroom.isHost() and _all_ready() and not Playroom.getState("force_start"):
 		Playroom.setState("force_start", true, true)
 
-	var now = Playroom.getState("force_start") == true
-	if now and not _last_force_start:
-		start_game()
-	_last_force_start = now
+func _poll_force_start():
+	var flag: bool = Playroom.getState("force_start") == true
+	# host starts timer only on the rising edge
+	if flag and not _last_force_start:
+		if Playroom.isHost() and not _game_started:
+			_game_started = true
+			start_timer.start()   # 3-second lobby countdown
+	_last_force_start = flag
+
+func _on_start_timer_timeout():
+	rpc("_rpc_do_start")                
+	_do_start_locally()                
+
+remote func _rpc_do_start():
+	_do_start_locally()
+
+func _do_start_locally():
+	start_game()                        # swap scene
+	# refresh the label reference now that Arena is in the tree
+	if _cd_label == null:
+		_cd_label = get_node_or_null(
+			"/root/arena/UI/CountdownContainer/CountdownLabel")
+	_arena_freeze(true)                 # lock gameplay
+	_cd = 5
+	get_tree().create_timer(0.1).connect(
+		"timeout", self, "_run_onscreen_countdown")
+
+func _arena_freeze(enable: bool):
+	for p in players.values():
+		if p.node:
+			p.node.can_play = not enable
+	if boss_node:
+		boss_node.can_play = not enable
+
+func _run_onscreen_countdown():
+	if _cd_label == null:
+		return                         # safety
+	_cd_label.visible = true
+	_cd_label.text    = str(_cd)
+	if _cd == 0:
+		_cd_label.visible = false
+		_arena_freeze(false)           # unlock input + AI
+	else:
+		_cd -= 1
+		get_tree().create_timer(1.0).connect(
+			"timeout", self, "_run_onscreen_countdown")
