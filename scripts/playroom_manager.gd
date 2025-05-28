@@ -270,9 +270,6 @@ func _on_player_jump(args:Array) -> void:
 #  Lobby / join / quit                                              #
 # ------------------------------------------------------------------#
 func _on_insert_coin(_args):
-	_game_started = false          # ← reset for next round
-
-	# 1) Register for future roster changes
 	Playroom.onPlayerJoin(_bridge("_on_player_join"))
 
 	# 2) Seed roster with yourself
@@ -547,7 +544,6 @@ func _process(delta):
 		_state_poll_accum -= STATE_POLL_RATE
 		_check_host_change()
 		_poll_lobby_state()   # the ready-state poll you already have
-		_poll_force_start()
 
 func _check_host_change():
 	if Playroom == null:
@@ -602,58 +598,14 @@ func _on_lost_host():
 func _poll_lobby_state():
 	if not _joined_room or _game_started:
 		return
-
 	# 1) Refresh ready cache
 	for state in get_player_states():
-		_ready_cache[str(state.id)] = state.getState("ready") == true
-
+		var id  = str(state.id)
+		_ready_cache[id] = state.getState("ready") == true
 	# 2) If host and everyone ready, set the flag once
-	if Playroom.isHost() and _all_ready() and not Playroom.getState("force_start"):
+	if Playroom.isHost() and _all_ready():
 		Playroom.setState("force_start", true, true)
-
-func _poll_force_start():
-	var flag: bool = Playroom.getState("force_start") == true
-	# host starts timer only on the rising edge
-	if flag and not _last_force_start:
-		if Playroom.isHost() and not _game_started:
-			_game_started = true
-			start_timer.start()   # 3-second lobby countdown
-	_last_force_start = flag
-
-func _on_start_timer_timeout():
-	rpc("_rpc_do_start")                
-	_do_start_locally()                
-
-remote func _rpc_do_start():
-	_do_start_locally()
-
-func _do_start_locally():
-	start_game()                        # swap scene
-	# refresh the label reference now that Arena is in the tree
-	if _cd_label == null:
-		_cd_label = get_node_or_null(
-			"/root/arena/UI/CountdownContainer/CountdownLabel")
-	_arena_freeze(true)                 # lock gameplay
-	_cd = 5
-	get_tree().create_timer(0.1).connect(
-		"timeout", self, "_run_onscreen_countdown")
-
-func _arena_freeze(enable: bool):
-	for p in players.values():
-		if p.node:
-			p.node.can_play = not enable
-	if boss_node:
-		boss_node.can_play = not enable
-
-func _run_onscreen_countdown():
-	if _cd_label == null:
-		return                         # safety
-	_cd_label.visible = true
-	_cd_label.text    = str(_cd)
-	if _cd == 0:
-		_cd_label.visible = false
-		_arena_freeze(false)           # unlock input + AI
-	else:
-		_cd -= 1
-		get_tree().create_timer(1.0).connect(
-			"timeout", self, "_run_onscreen_countdown")
+	var now = Playroom.getState("force_start") == true
+	if now and not _last_force_start:
+		start_game()
+	_last_force_start = now
