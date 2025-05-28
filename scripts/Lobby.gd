@@ -17,7 +17,7 @@ onready var _template := $Card/VBox/PlayerPanel/PlayerList/PlayerRowTemplate
 
 var Playroom := JavaScript.get_interface("Playroom")
 var _poll_accum := 0.0
- 
+var _ready_cache := {}
 const POLL_RATE := 0.2
 
 func _ready():
@@ -80,12 +80,12 @@ func _on_ready_pressed():
 	_refresh_start_button()
 
 func _on_start_pressed():
-	if Playroom.isHost():
-		Playroom.setState("force_start", true)  # host triggers match
+	PlayroomManager.host_start_match()           
 
 #------------------------------------------------------------------#
 #  Event listeners                                                  #
 #------------------------------------------------------------------#
+
 func _on_player_join(args):
 	var player = args[0]
 	_add_or_update_row(player)
@@ -94,10 +94,11 @@ func _on_player_quit(args):
 	var id = str(args[0].id)
 	if _list.has_node(id):
 		_list.get_node(id).queue_free()
+	_refresh_start_button()    
 
 func _on_ready_state(args):
-	var player = args[0]
-	_add_or_update_row(player)
+	var p_state = args[0]
+	_add_or_update_row(p_state)
 	_refresh_start_button()
 
 func _refresh_start_button():
@@ -113,17 +114,18 @@ func _refresh_start_button():
 func _process(delta):
 	_poll_accum += delta
 	if _poll_accum >= POLL_RATE:
-		_poll_accum -= POLL_RATE
+		_poll_accum = 0
+		for p in PlayroomManager.get_player_states():
+			var id = str(p.id)
+			var is_ready = p.getState("ready") == true
+			_ready_cache[id] = is_ready
+		_refresh_start_button()
 		_refresh_player_rows()
-		_check_force_start()
 
 func _refresh_player_rows():
 	for p in PlayroomManager.get_player_states():
 		_add_or_update_row(p)
 
-func _check_force_start():
-	if Playroom.getState("force_start") == true:
-		# avoid double-start
-		if get_tree().current_scene.filename != "res://scenes/Arena.tscn":
-			PlayroomManager.start_game()
-		
+func _exit_tree():
+	_js_refs.clear()   # dropping refs is enough in Godot 3.x
+

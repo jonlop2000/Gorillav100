@@ -19,6 +19,15 @@ var _cd  := 5
 
 var _state_poll_accum := 0.0
 const STATE_POLL_RATE := 0.2      # seconds
+
+# ----------   PHASE / TIMER KEYS  ----------
+const KEY_PHASE      := "phase"        # int  (0-3)
+const KEY_TIME_LEFT  := "time_left"    # float (s)
+enum Phase { LOBBY, COUNTDOWN, PLAYING, GAME_OVER }
+
+const PRE_GAME_SECONDS  := 5           # “get ready” delay
+const POST_GAME_SECONDS := 7           # time to show Victory/Game-Overs
+
 # ---------------------------------------------------------------------#
 #  State                                                               #
 # ---------------------------------------------------------------------#
@@ -26,7 +35,6 @@ var players   := {}  # id → { state, node, joy? }
 var boss_node : Node = null
 var _ready_cache := {} #id->bool
 var _game_started := false
-var _last_force_start := false
 var _joined_room := false
 
 # timers
@@ -34,12 +42,18 @@ var _accum_player := 0.0
 var _accum_boss   := 0.0
 var start_timer : Timer
 var end_timer : Timer
+var _current_phase    : int   = Phase.LOBBY
+var _phase_time_left  : float = 0.0
+
 
 # root holders are updated every time we switch scenes
 var _players_root : Node = null
 var _ui_root      : Node = null
 var _boss_parent  : Node = null
 var lobby_panel: Control = null
+var _countdown_lbl  : Label   = null      # shows 5-4-3-2-1
+var _gameover_panel : Control = null      # Victory / Game-Over splash
+
 # keep JS callbacks alive
 var _js_refs := []
 
@@ -50,6 +64,149 @@ func _bridge(method:String):
 	var cb = JavaScript.create_callback(self, method)
 	_js_refs.append(cb)
 	return cb
+
+# ---------------------------------------------------------------------#
+#  Boot                                                                #
+# ---------------------------------------------------------------------#
+func _ready():	
+	JavaScript.eval("")   # initialise bridge
+	Playroom.RPC.register("punch", _bridge("_on_punch"))
+	Playroom.RPC.register("hook", _bridge("_on_hook"))
+	Playroom.RPC.register("roll", _bridge("_on_roll"))
+	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
+	Playroom.RPC.register("jump", _bridge("_on_player_jump"))
+	Playroom.RPC.register("show_hit_effects", _bridge("_on_show_hit_effects"))
+	
+	Playroom.waitForState(KEY_PHASE, _bridge("_on_phase_set"))
+#	Playroom.waitForState(KEY_TIME_LEFT, _bridge("_on_time_set"))
+   # ---------------------------------------------------------------------
+	if OS.has_feature("HTML5"):
+		var opts = JavaScript.create_object("Object")
+		opts.gameId = "I2okszCMAwuMeW4fxFGD"
+		opts.discord = true
+		opts.skipLobby = true
+		Playroom.insertCoin(opts, _bridge("_on_insert_coin"))
+		# sync to whatever host already set (ulate join case)
+		_current_phase    = _safe_int_state(KEY_PHASE, Phase.LOBBY)
+		_phase_time_left  = _safe_float_state(KEY_TIME_LEFT, 0.0)
+	else:
+		# editor debug: spawn one local player + boss
+		var dummy_state = {}
+		dummy_state.id = "LOCAL"
+		var local_node = _spawn_player(dummy_state)
+		local_node.make_local()  
+		players["LOCAL"] = { "state": dummy_state, "node": local_node }
+		boss_node = _spawn_boss()
+
+func _safe_int_state(key: String, fallback: int) -> int:
+	var v = Playroom.getState(key)
+	if v == null:
+		return fallback
+	return int(v)
+
+func _safe_float_state(key: String, fallback: float) -> float:
+	var v = Playroom.getState(key)
+	if v == null:
+		return fallback
+	return float(v)
+
+func _on_phase_set(args):
+	if args.size() == 0:
+		return
+	var phase_val = args[0]
+	if phase_val == null:
+		return
+	_current_phase = phase_val
+	_apply_phase()
+
+#func _on_time_set(args):
+#	if args.size() == 0:
+#		return
+#	var time_val = args[0]
+#	if time_val == null:
+#		return
+#	_phase_time_left = time_val
+#	if _countdown_lbl:
+#		_countdown_lbl.text = str(ceil(_phase_time_left))
+
+func _apply_phase():
+	match _current_phase:
+		Phase.COUNTDOWN:
+			if get_tree().current_scene.filename != ARENA_SCENE.resource_path:
+				start_game()
+			_freeze_all_local_players()
+			if _countdown_lbl:
+				var container = _countdown_lbl.get_parent()
+				container.visible = true
+		Phase.PLAYING:
+			_unfreeze_all_local_players()
+			if _countdown_lbl: 
+				var container = _countdown_lbl.get_parent()
+				container.visible = false
+		Phase.GAME_OVER:
+			_freeze_all_local_players()
+			if _gameover_panel:
+				var victory = Playroom.getState("result", false)
+				var text_to_show := "Victory!"
+				if not victory:
+					text_to_show = "Game Over"
+				_gameover_panel.get_node("VBox/Title").text = text_to_show
+				_gameover_panel.show()
+		Phase.LOBBY:
+			if _countdown_lbl:
+				var container = _countdown_lbl.get_parent()
+				container.visible = false
+			if _gameover_panel:  _gameover_panel.hide()
+
+# --------------------------------------------------
+#  Freeze / unfreeze every LOCAL player on this client
+# --------------------------------------------------
+func _freeze_all_local_players() -> void:
+	for entry in players.values():
+		if entry.has("node") and entry.node and entry.node.is_local:
+			entry.node.freeze_controls()
+
+func _unfreeze_all_local_players() -> void:
+	for entry in players.values():
+		if entry.has("node") and entry.node and entry.node.is_local:
+			entry.node.unfreeze_controls()
+
+
+### ----------  MATCH-FLOW  ----------
+func _host_begin_countdown():
+	_current_phase   = Phase.COUNTDOWN
+	_phase_time_left = PRE_GAME_SECONDS
+	Playroom.setState(KEY_PHASE, _current_phase)         # reliable default :contentReference[oaicite:1]{index=1}
+	Playroom.setState(KEY_TIME_LEFT, _phase_time_left)  # we’ll spam this once a sec
+
+func _host_start_gameplay():
+	_current_phase = Phase.PLAYING
+	Playroom.setState(KEY_PHASE, _current_phase)
+	# allow movement
+	for entry in players.values():
+		if entry.node:         
+			entry.node.unfreeze_controls()
+
+func _host_end_game(victory: bool):
+	_current_phase   = Phase.GAME_OVER
+	_phase_time_left = POST_GAME_SECONDS
+	Playroom.setState(KEY_PHASE, _current_phase)
+	Playroom.setState(KEY_TIME_LEFT, _phase_time_left, false)
+	Playroom.setState("result", victory)  # true = players win
+
+func _host_return_to_lobby():
+	_goto_lobby()                         # you already have this
+	_current_phase = Phase.LOBBY
+	Playroom.setState(KEY_TIME_LEFT, 0, false)
+	Playroom.setState(KEY_PHASE, _current_phase)
+	if _gameover_panel: _gameover_panel.hide()
+
+# Returns an Array of the current PlayerState objects
+func get_player_states() -> Array:
+	var out := []
+	for id in players.keys():
+		out.append(players[id]["state"])
+	return out
 
 func _spawn_player(state):
 	var inst = PLAYER_SCENE.instance()
@@ -95,7 +252,6 @@ func _spawn_boss():
 		push_error("Cannot spawn boss: _boss_parent is null!")
 	return inst
 
-
 func _pack_player(node:Node) -> Dictionary:
 	return {
 		"px": node.global_transform.origin.x,
@@ -103,7 +259,6 @@ func _pack_player(node:Node) -> Dictionary:
 		"pz": node.global_transform.origin.z,
 		"rot": node.rotation.y
 	}
-
 
 func _pack_boss() -> Dictionary:
 	if boss_node == null:
@@ -116,56 +271,6 @@ func _pack_boss() -> Dictionary:
 		"anim": boss_node.get_current_anim(),
 		"hp" : boss_node.get("health") if boss_node else 0
 	}
-
-# ---------------------------------------------------------------------#
-#  Boot                                                                #
-# ---------------------------------------------------------------------#
-func _ready():	
-	JavaScript.eval("")   # initialise bridge
-	Playroom.RPC.register("punch", _bridge("_on_punch"))
-	Playroom.RPC.register("hook", _bridge("_on_hook"))
-	Playroom.RPC.register("roll", _bridge("_on_roll"))
-	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
-	Playroom.RPC.register("jump", _bridge("_on_player_jump"))
-	Playroom.RPC.register("show_hit_effects", _bridge("_on_show_hit_effects"))
-	
-	#--Round Timers--------------------------------------------------------
-	start_timer = Timer.new()
-	start_timer.name = "StartTimer"
-	start_timer.one_shot = true
-	start_timer.wait_time = 3.0
-	add_child(start_timer)
-	start_timer.connect("timeout", self, "_on_start_timer_timeout")
-
-	end_timer = Timer.new()
-	end_timer.name = "EndTimer"
-	end_timer.one_shot = true
-	end_timer.wait_time = 5.0         # 5-sec results screen
-	add_child(end_timer)
-	end_timer.connect("timeout", self, "_on_end_timer_timeout")
-   # ---------------------------------------------------------------------
-	if OS.has_feature("HTML5"):
-		var opts = JavaScript.create_object("Object")
-		opts.gameId = "I2okszCMAwuMeW4fxFGD"
-		opts.discord = true
-		opts.skipLobby = true
-		Playroom.insertCoin(opts, _bridge("_on_insert_coin"))
-	else:
-		# editor debug: spawn one local player + boss
-		var dummy_state = {}
-		dummy_state.id = "LOCAL"
-		var local_node = _spawn_player(dummy_state)
-		local_node.make_local()  
-		players["LOCAL"] = { "state": dummy_state, "node": local_node }
-		boss_node = _spawn_boss()
-
-# Returns an Array of the current PlayerState objects
-func get_player_states() -> Array:
-	var out := []
-	for id in players.keys():
-		out.append(players[id]["state"])
-	return out
-
 
 func _on_punch(args:Array) -> void:
 	# ── play the punch animation for other clients ──
@@ -265,6 +370,8 @@ func _on_player_jump(args:Array) -> void:
 
 	# tell that player to go into the Jump state
 	players[id].node._begin_jump()
+	
+	
 
 # ------------------------------------------------------------------#
 #  Lobby / join / quit                                              #
@@ -272,26 +379,22 @@ func _on_player_jump(args:Array) -> void:
 func _on_insert_coin(_args):
 	Playroom.onPlayerJoin(_bridge("_on_player_join"))
 
-	# 2) Seed roster with yourself
+	# 1) Seed roster with yourself
 	var me_state = Playroom.me()
 	if me_state:
 		_on_player_join([me_state])
-
-	# 3) Cache host flag & other room state
+	# 2) Cache host flag & other room state
 	_cached_is_host = Playroom.isHost()
 	if _cached_is_host:
 		_on_became_host()
 	else:
 		_on_lost_host()
-	_last_force_start = Playroom.getState("force_start") == true
-	_joined_room      = true
-
-	# 4) Prefetch avatars
+	_joined_room = true    
+	# 3) Prefetch avatars
 	for state in get_player_states():
 		var url = state.getProfile().photo
 		if url and url.begins_with("http"):
 			AvatarCache.fetch(str(state.id), url)
-
 	# 5) Load lobby
 	_goto_lobby()
 
@@ -340,28 +443,36 @@ func _show_lobby_panel():
 	if lobby_panel:
 		lobby_panel.visible = true
 
-func start_game():
-	if _game_started:
-		return
-	_game_started = true
+func start_game() -> void:
 	get_tree().change_scene_to(ARENA_SCENE)
-	yield(get_tree(), "idle_frame")
-	_hide_lobby_panel() 
+	yield(get_tree(), "idle_frame")     # wait for scene swap
+	_hide_lobby_panel()
 	_hook_scene_paths()
-	# spawn all players...
+
+	# Spawn existing players
 	for id in players.keys():
 		var entry = players[id]
 		if entry.node == null:
 			entry.node = _spawn_player(entry.state)
-	# spawn boss once
+
+	# Spawn boss once
 	if boss_node == null:
 		boss_node = _spawn_boss()
-	# ── NEW: reset the global "force_start" flag on the host ──
+		boss_node.connect("died", self, "_on_boss_died")
 	if Playroom.isHost():
-		Playroom.setState("force_start", false, true)
+		_host_begin_countdown()
+
+# --------------------------------------------------
+#  Kick-off from the lobby (host only)
+# --------------------------------------------------
+func host_start_match() -> void:
+	if not Playroom.isHost():
+		return                      # safety – clients do nothing
+	start_game()                    # your existing scene-load helper
+
 
 func _hide_lobby_panel():
-	if lobby_panel:
+	if lobby_panel and is_instance_valid(lobby_panel):
 		lobby_panel.visible = false
 
 func _hook_scene_paths():
@@ -375,25 +486,27 @@ func _hook_scene_paths():
 		_boss_parent = scene.get_node(boss_path)
 	else:
 		_boss_parent = null
-		_boss_parent = null
+
+	if scene.has_node("UI/CountdownContainer"):
+		var container = scene.get_node("UI/CountdownContainer")
+		container.visible = false
+		if container.has_node("CountdownLabel"):
+			_countdown_lbl = container.get_node("CountdownLabel")
+
+	if scene.has_node("UI/GameOverPanel"):
+		_gameover_panel = scene.get_node("UI/GameOverPanel")
+		_gameover_panel.hide()
 
 # ------------------------------------------------------------------#
 #  Ready / start logic                                              #
 # ------------------------------------------------------------------#
 func _on_ready_state(args):
-	var p      = args[0]        # Player object
-	var is_rdy = args[1]        # bool
+	var p      = args[0]              # Player object
+	var is_rdy = args[1]              # bool
 	_ready_cache[str(p.id)] = is_rdy
-	# host: auto-start when everyone ready
+	# Host: auto-start when everyone ready
 	if Playroom.isHost() and _all_ready():
-		_broadcast_force_start()
-
-func _on_force_start(_args):
-	# anyone receiving this just loads the arena
-	start_game()
-
-func _broadcast_force_start():
-	Playroom.setState("force_start", true)
+		host_start_match()          
 
 func _all_ready() -> bool:
 	for v in _ready_cache.values():
@@ -538,12 +651,62 @@ func _exit_tree():
 
 var _cached_is_host := false
 
-func _process(delta):
+func _process(delta: float) -> void:
+	# 1) Lobby updates (while in LOBBY phase)
 	_state_poll_accum += delta
 	if _state_poll_accum >= STATE_POLL_RATE:
 		_state_poll_accum -= STATE_POLL_RATE
 		_check_host_change()
-		_poll_lobby_state()   # the ready-state poll you already have
+		_poll_lobby_state()
+
+	# 2) Host drives the countdown & post‐game timers
+	if Playroom.isHost():
+		_tick_host_phase(delta)
+
+	# 3) Countdown UI (for everyone, including host)
+	match _current_phase:
+		Phase.COUNTDOWN:
+			# ensure container is visible
+			if _countdown_lbl:
+				var container = _countdown_lbl.get_parent()
+				container.visible = true
+				# show the rounded‐up seconds
+				var sec = int(ceil(_phase_time_left))
+				_countdown_lbl.text = String(sec)
+
+		Phase.PLAYING, Phase.LOBBY:
+			# hide the countdown when play starts or back in lobby
+			if _countdown_lbl:
+				var container2 = _countdown_lbl.get_parent()
+				container2.visible = false
+
+		# you’re already handling GAME_OVER UI in _apply_phase(),
+		# so you can leave it out of here if you like.
+		_:
+			pass
+
+
+func _tick_host_phase(delta: float) -> void:
+	match _current_phase:
+		Phase.COUNTDOWN:
+			_phase_time_left = max(_phase_time_left - delta, 0.0)
+			var int_left = int(_phase_time_left)
+			# only broadcast when the integer part changes
+			if int_left != int(_safe_float_state(KEY_TIME_LEFT, -1.0)):
+				Playroom.setState(KEY_TIME_LEFT, _phase_time_left)   # reliable
+			if _phase_time_left <= 0.0:
+				_host_start_gameplay()
+
+		Phase.GAME_OVER:
+			_phase_time_left = max(_phase_time_left - delta, 0.0)
+			var int_left2 = int(_phase_time_left)
+			if int_left2 != int(_safe_float_state(KEY_TIME_LEFT, -1.0)):
+				Playroom.setState(KEY_TIME_LEFT, _phase_time_left)
+			if _phase_time_left <= 0.0:
+				_host_return_to_lobby()
+		_:
+			# no ticking in LOBBY or PLAYING
+			pass
 
 func _check_host_change():
 	if Playroom == null:
@@ -561,8 +724,9 @@ func _check_host_change():
 			_on_lost_host()
 
 func _on_became_host():
-	print("⚡ I am now host")
-
+	print("⚡ Host migrated to ME")
+	_current_phase   = _safe_int_state(KEY_PHASE, Phase.LOBBY)
+	_phase_time_left = _safe_float_state(KEY_TIME_LEFT, 0.0)
 	# 1) Lobby UI — show the Start button
 	if get_tree().current_scene == LOBBY_SCENE and _ui_root:
 		var btn = _ui_root.get_node_or_null("StartButton")
@@ -596,16 +760,10 @@ func _on_lost_host():
 		boss_node.deactivate_ai()        
 
 func _poll_lobby_state():
-	if not _joined_room or _game_started:
+	if not _joined_room or _current_phase != Phase.LOBBY:
 		return
-	# 1) Refresh ready cache
 	for state in get_player_states():
 		var id  = str(state.id)
 		_ready_cache[id] = state.getState("ready") == true
-	# 2) If host and everyone ready, set the flag once
 	if Playroom.isHost() and _all_ready():
-		Playroom.setState("force_start", true, true)
-	var now = Playroom.getState("force_start") == true
-	if now and not _last_force_start:
-		start_game()
-	_last_force_start = now
+		host_start_match()     # NEW call — no global flag needed

@@ -55,10 +55,12 @@ onready var hit_particles : CPUParticles = $visual/GorillaBossGD/Armature/Skelet
 onready var hit_sfx : AudioStreamPlayer3D = $HitSound
 var _orig_albedo : Color = Color(1, 1, 1)   # <── add this line
 
+var _ai_enabled := true
 
 ##  Signals  (manager listens to these)
 signal anim_changed(anim_name)
 signal health_changed(hp)
+signal died 
 
 var moves = {
 	"Melee": {"range":1.0, "cooldown":2.0,  "weight":5, "knockback": 2.0, "damage":0, "func":"_do_melee"},
@@ -190,8 +192,8 @@ func _broadcast_attack(move_name:String) -> void:
 
 ## ───────────────  Host‑only physics / AI  ─────────────── ##
 func _physics_process(delta):
-#	if _test_freeze:
-#		return
+	if not _ai_enabled:
+		return
 	_update_stagger(delta) 
 	if _is_staggered:
 		_update_hp_bar()
@@ -498,6 +500,7 @@ func take_damage(amount : int) -> void:
 	health = clamp(health - amount, 0, max_health)
 	emit_signal("health_changed", health)
 	if health == 0:
+		emit_signal("died") 
 		_die()
 
 func _update_hp_bar():
@@ -535,4 +538,9 @@ func _react_to_hit() -> void:
 	_emit_hit_particles()
 	_play_hit_sfx()
 
+# ----- AI enable flag -----
+func freeze_ai() -> void:
+	_ai_enabled = false
 
+func unfreeze_ai() -> void:
+	_ai_enabled = true
