@@ -87,8 +87,9 @@ func _on_start_pressed():
 #------------------------------------------------------------------#
 
 func _on_player_join(args):
-	var player = args[0]
-	_add_or_update_row(player)
+	var state  = args[0]
+	_add_or_update_row(state )
+	state.onQuit(_bridge("onPlayerQuit"))
 
 func _on_player_quit(args):
 	var id = str(args[0].id)

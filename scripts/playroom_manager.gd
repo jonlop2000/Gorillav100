@@ -54,7 +54,7 @@ var lobby_panel: Control = null
 var _countdown_lbl  : Label   = null      # shows 5-4-3-2-1
 var _gameover_panel : Control = null      # Victory / Game-Over splash
 var _is_frozen := false
-
+var players_alive := []
 # keep JS callbacks alive
 var _js_refs := []
 
@@ -78,7 +78,6 @@ func _ready():
 	Playroom.RPC.register("jump", _bridge("_on_player_jump"))
 	Playroom.RPC.register("show_hit_effects", _bridge("_on_show_hit_effects"))
 	Playroom.waitForState(KEY_PHASE, _bridge("_on_phase_set"))
-#	Playroom.waitForState(KEY_TIME_LEFT, _bridge("_on_time_set"))
    # ---------------------------------------------------------------------
 	if OS.has_feature("HTML5"):
 		var opts = JavaScript.create_object("Object")
@@ -121,38 +120,45 @@ func _on_phase_set(args):
 
 func _apply_phase():
 	match _current_phase:
+		Phase.LOBBY:
+			# Everyone returns to the lobby scene & UI
+			_goto_lobby()
 		Phase.COUNTDOWN:
+			# If we haven’t loaded the arena yet, do so
 			if get_tree().current_scene.filename != ARENA_SCENE.resource_path:
 				start_game()
+			# Boss kneels & is invulnerable
 			if boss_node:
 				boss_node.set_invincible(true)
 				boss_node.during_countdown = true
 				boss_node.sm.travel("KneelToStand")
+			# Show countdown UI
 			if _countdown_lbl:
-				var container = _countdown_lbl.get_parent()
-				container.visible = true
+				_countdown_lbl.get_parent().visible = true
 		Phase.PLAYING:
+			# Boss becomes vulnerable again and AI resumes
 			if boss_node:
 				boss_node.set_invincible(false)
 				boss_node.during_countdown = false
-				_unfreeze_boss()   # only unfreeze here, not in COUNTDOWN
-			if _countdown_lbl: 
-				var container = _countdown_lbl.get_parent()
-				container.visible = false
+				_unfreeze_boss()
+			# Hide countdown UI
+			if _countdown_lbl:
+				_countdown_lbl.get_parent().visible = false
 		Phase.GAME_OVER:
-			_freeze_boss()  # Freeze everything during game over
+			# Stop the boss
+			_freeze_boss()
+			# Make sure countdown UI is hidden
+			if _countdown_lbl:
+				_countdown_lbl.get_parent().visible = false
+
+			# Show Game Over panel with explicit if/else
 			if _gameover_panel:
 				var victory = Playroom.getState("result", false)
-				var text_to_show := "Victory!"
+				var text_to_show = "Victory!"
 				if not victory:
 					text_to_show = "Game Over"
 				_gameover_panel.get_node("VBox/Title").text = text_to_show
 				_gameover_panel.show()
-		Phase.LOBBY:
-			if _countdown_lbl:
-				var container = _countdown_lbl.get_parent()
-				container.visible = false
-			if _gameover_panel:  _gameover_panel.hide()
 
 # --------------------------------------------------
 #  Freeze / unfreeze every LOCAL player on this client
@@ -188,11 +194,12 @@ func _host_end_game(victory: bool):
 	Playroom.setState("result", victory)  # true = players win
 
 func _host_return_to_lobby():
-	_goto_lobby()                         # you already have this
+	# 1) Tell everyone we’re in Lobby
 	_current_phase = Phase.LOBBY
-	Playroom.setState(KEY_TIME_LEFT, 0, false)
-	Playroom.setState(KEY_PHASE, _current_phase)
-	if _gameover_panel: _gameover_panel.hide()
+	Playroom.setState(KEY_TIME_LEFT, 0.0, false)
+	Playroom.setState(KEY_PHASE,       _current_phase)
+	Playroom.setState("result",        null)
+
 
 # Returns an Array of the current PlayerState objects
 func get_player_states() -> Array:
@@ -250,16 +257,19 @@ func _pack_player(node:Node) -> Dictionary:
 	}
 
 func _pack_boss() -> Dictionary:
-	if boss_node == null:
-		return {}  
+	# Don’t try to read a freed or null instance
+	if boss_node == null or not is_instance_valid(boss_node):
+		return {}
+	var pos = boss_node.global_transform.origin
 	return {
-		"px": boss_node.global_transform.origin.x,
-		"py": boss_node.global_transform.origin.y,
-		"pz": boss_node.global_transform.origin.z,
+		"px": pos.x,
+		"py": pos.y,
+		"pz": pos.z,
 		"rot": boss_node.rotation.y,
 		"anim": boss_node.get_current_anim(),
-		"hp" : boss_node.get("health") if boss_node else 0
+		"hp": boss_node.health
 	}
+
 
 func _on_punch(args:Array) -> void:
 	# ── play the punch animation for other clients ──
@@ -418,11 +428,11 @@ func _on_player_quit(args):
 # ------------------------------------------------------------------#
 func _goto_lobby():
 	if get_tree().current_scene == LOBBY_SCENE:
-		return          # already there, no reload
+		return
 	get_tree().change_scene_to(LOBBY_SCENE)
 	yield(get_tree(), "idle_frame")
 	_hook_scene_paths()
-	_show_lobby_panel() 
+	_show_lobby_panel()
 	
 func register_lobby_panel(panel: Control):
 	lobby_panel = panel
@@ -434,7 +444,7 @@ func _show_lobby_panel():
 
 func start_game() -> void:
 	get_tree().change_scene_to(ARENA_SCENE)
-	yield(get_tree(), "idle_frame")     # wait for scene swap
+	yield(get_tree(), "idle_frame")
 	_hide_lobby_panel()
 	_hook_scene_paths()
 
@@ -447,9 +457,34 @@ func start_game() -> void:
 	# Spawn boss once
 	if boss_node == null:
 		boss_node = _spawn_boss()
-		boss_node.connect("died", self, "_on_boss_died")
+
+	# Only the host sets up end‐game logic
 	if Playroom.isHost():
+		# 1) Boss death → players win
+		boss_node.connect("died", self, "_on_boss_died")
+
+		# 2) Player death → track survivors
+		players_alive.clear()
+		for id in players.keys():
+			var p = players[id].node
+			players_alive.append(p)
+			p.connect("died", self, "_on_player_died")
+
 		_host_begin_countdown()
+
+func _on_boss_died():
+	if boss_node:
+		boss_node.disconnect("died", self, "_on_boss_died")
+		boss_node = null
+
+	_host_end_game(true)
+
+func _on_player_died(dead_player):
+	# remove that player from our alive list
+	players_alive.erase(dead_player)
+	# if no one’s left, boss wins
+	if players_alive.empty():
+		_host_end_game(false)
 
 # --------------------------------------------------
 #  Kick-off from the lobby (host only)
@@ -679,7 +714,6 @@ func _process(delta: float) -> void:
 		# (GAME_OVER UI is handled in _apply_phase)
 
 
-
 func _tick_host_phase(delta: float) -> void:
 	match _current_phase:
 		Phase.COUNTDOWN:
@@ -701,6 +735,7 @@ func _tick_host_phase(delta: float) -> void:
 		_:
 			# no ticking in LOBBY or PLAYING
 			pass
+
 
 func _check_host_change():
 	if Playroom == null:

@@ -56,6 +56,7 @@ onready var hit_sfx : AudioStreamPlayer3D = $HitSound
 var _orig_albedo : Color = Color(1, 1, 1)   # <── add this line
 
 var _ai_enabled := true
+var is_dead
 var invincible : bool = false
 var during_countdown := false
 
@@ -193,7 +194,7 @@ func _broadcast_attack(move_name:String) -> void:
 
 ## ───────────────  Host‑only physics / AI  ─────────────── ##
 func _physics_process(delta):
-	if not _ai_enabled:
+	if not _ai_enabled or _is_dead:
 		return
 	_update_stagger(delta) 
 	if _is_staggered:
@@ -462,14 +463,39 @@ func _apply_vertical(delta: float) -> void:
 			else:
 				_vert_vel = 0.0
 
+# at top
+var _is_dead := false
+
 func apply_damage(amount:int) -> void:
-	if invincible: return
+	if invincible or _is_dead:
+		return
 	health = max(health - amount, 0)
 	emit_signal("health_changed", health)
+
 	if health > 0 and health <= _next_stagger_hp and not _is_staggered:
 		_enter_stagger()
+
 	if health <= 0:
+		_is_dead = true
 		sm.travel("Death")
+		emit_signal("died")
+
+		# once the Death animation finishes, free yourself
+		anim_player.connect(
+			"animation_finished",
+			self,
+			"_on_death_animation_finished",
+			[], CONNECT_ONESHOT
+		)
+
+func _on_death_animation_finished(anim_name:String) -> void:
+	if anim_name == "Death":
+		call_deferred("queue_free")
+
+
+func _on_animation_finished(anim_name:String):
+	if anim_name == "Death":
+		call_deferred("queue_free")
 
 func _enter_stagger() -> void:
 	if _is_staggered: return
