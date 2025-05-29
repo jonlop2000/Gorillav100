@@ -25,7 +25,7 @@ const KEY_PHASE      := "phase"        # int  (0-3)
 const KEY_TIME_LEFT  := "time_left"    # float (s)
 enum Phase { LOBBY, COUNTDOWN, PLAYING, GAME_OVER }
 
-const PRE_GAME_SECONDS  := 5           # “get ready” delay
+const PRE_GAME_SECONDS  := 5           # "get ready" delay
 const POST_GAME_SECONDS := 7           # time to show Victory/Game-Overs
 
 # ---------------------------------------------------------------------#
@@ -53,6 +53,7 @@ var _boss_parent  : Node = null
 var lobby_panel: Control = null
 var _countdown_lbl  : Label   = null      # shows 5-4-3-2-1
 var _gameover_panel : Control = null      # Victory / Game-Over splash
+var _is_frozen := false
 
 # keep JS callbacks alive
 var _js_refs := []
@@ -76,7 +77,6 @@ func _ready():
 	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
 	Playroom.RPC.register("jump", _bridge("_on_player_jump"))
 	Playroom.RPC.register("show_hit_effects", _bridge("_on_show_hit_effects"))
-	
 	Playroom.waitForState(KEY_PHASE, _bridge("_on_phase_set"))
 #	Playroom.waitForState(KEY_TIME_LEFT, _bridge("_on_time_set"))
    # ---------------------------------------------------------------------
@@ -134,17 +134,17 @@ func _apply_phase():
 		Phase.COUNTDOWN:
 			if get_tree().current_scene.filename != ARENA_SCENE.resource_path:
 				start_game()
-			_freeze_all_local_players()
+			_freeze_all_local_players()  # Freeze everything during countdown
 			if _countdown_lbl:
 				var container = _countdown_lbl.get_parent()
 				container.visible = true
 		Phase.PLAYING:
-			_unfreeze_all_local_players()
+			_unfreeze_all_local_players()  # Unfreeze everything when playing starts
 			if _countdown_lbl: 
 				var container = _countdown_lbl.get_parent()
 				container.visible = false
 		Phase.GAME_OVER:
-			_freeze_all_local_players()
+			_freeze_all_local_players()  # Freeze everything during game over
 			if _gameover_panel:
 				var victory = Playroom.getState("result", false)
 				var text_to_show := "Victory!"
@@ -162,14 +162,24 @@ func _apply_phase():
 #  Freeze / unfreeze every LOCAL player on this client
 # --------------------------------------------------
 func _freeze_all_local_players() -> void:
+	# Freeze all players (local and remote)
 	for entry in players.values():
-		if entry.has("node") and entry.node and entry.node.is_local:
+		if entry.has("node") and entry.node and is_instance_valid(entry.node):
 			entry.node.freeze_controls()
+	
+	# Freeze boss if it exists
+	if boss_node and is_instance_valid(boss_node):
+		boss_node.freeze_ai()
 
 func _unfreeze_all_local_players() -> void:
+	# Unfreeze all players (local and remote)
 	for entry in players.values():
-		if entry.has("node") and entry.node and entry.node.is_local:
+		if entry.has("node") and entry.node and is_instance_valid(entry.node):
 			entry.node.unfreeze_controls()
+	
+	# Unfreeze boss if it exists
+	if boss_node and is_instance_valid(boss_node):
+		boss_node.unfreeze_ai()
 
 
 ### ----------  MATCH-FLOW  ----------
@@ -177,7 +187,7 @@ func _host_begin_countdown():
 	_current_phase   = Phase.COUNTDOWN
 	_phase_time_left = PRE_GAME_SECONDS
 	Playroom.setState(KEY_PHASE, _current_phase)         # reliable default :contentReference[oaicite:1]{index=1}
-	Playroom.setState(KEY_TIME_LEFT, _phase_time_left)  # we’ll spam this once a sec
+	Playroom.setState(KEY_TIME_LEFT, _phase_time_left)  # we'll spam this once a sec
 
 func _host_start_gameplay():
 	_current_phase = Phase.PLAYING
@@ -232,10 +242,6 @@ func _spawn_player(state):
 		var rot = state.getState("rot")
 		if rot != null:
 			inst.rotation.y = rot
-
-	print("%s spawned – local=%s" % [inst.name, inst.is_local])
-	return inst
-
 
 	print("%s spawned – local=%s" % [inst.name, inst.is_local])
 	return inst
@@ -371,8 +377,6 @@ func _on_player_jump(args:Array) -> void:
 	# tell that player to go into the Jump state
 	players[id].node._begin_jump()
 	
-	
-
 # ------------------------------------------------------------------#
 #  Lobby / join / quit                                              #
 # ------------------------------------------------------------------#
@@ -532,7 +536,6 @@ func _physics_process(delta):
 	# ─ Only run in Playroom (HTML5) context ───────────────────────────
 	if not OS.has_feature("HTML5"):
 		return
-
 	# ─── HOST: throttle & publish authoritative transforms ─────────────
 	if Playroom.isHost():
 		_accum_player += delta
@@ -545,7 +548,7 @@ func _physics_process(delta):
 				var state = entry.state
 
 				if node == null or not is_instance_valid(node):
-					# clean up so future loops don’t see it
+					# clean up so future loops don't see it
 					entry.node = null
 					continue
 
@@ -652,38 +655,44 @@ func _exit_tree():
 var _cached_is_host := false
 
 func _process(delta: float) -> void:
-	# 1) Lobby updates (while in LOBBY phase)
+	# 1) State‐polling loop (runs every STATE_POLL_RATE seconds)
 	_state_poll_accum += delta
 	if _state_poll_accum >= STATE_POLL_RATE:
 		_state_poll_accum -= STATE_POLL_RATE
+
 		_check_host_change()
 		_poll_lobby_state()
 
-	# 2) Host drives the countdown & post‐game timers
+		if not Playroom.isHost():
+			# ––– Guest: check for phase changes via getState() –––
+			var phase_raw = Playroom.getState(KEY_PHASE)
+			if phase_raw != null:
+				var new_phase = int(phase_raw)
+				if new_phase != _current_phase:
+					_current_phase = new_phase
+					_apply_phase()
+
+			# ––– If we're in COUNTDOWN, keep the timer in sync –––
+			if _current_phase == Phase.COUNTDOWN:
+				var time_raw = Playroom.getState(KEY_TIME_LEFT)
+				if time_raw != null:
+					_phase_time_left = float(time_raw)
+	# 2) Host drives phase‐timers
 	if Playroom.isHost():
 		_tick_host_phase(delta)
 
-	# 3) Countdown UI (for everyone, including host)
+	# 3) Local UI updates (every frame)
 	match _current_phase:
 		Phase.COUNTDOWN:
-			# ensure container is visible
 			if _countdown_lbl:
-				var container = _countdown_lbl.get_parent()
-				container.visible = true
-				# show the rounded‐up seconds
-				var sec = int(ceil(_phase_time_left))
-				_countdown_lbl.text = String(sec)
-
+				var box = _countdown_lbl.get_parent()
+				box.visible = true
+				_countdown_lbl.text = str(int(ceil(_phase_time_left)))
 		Phase.PLAYING, Phase.LOBBY:
-			# hide the countdown when play starts or back in lobby
 			if _countdown_lbl:
-				var container2 = _countdown_lbl.get_parent()
-				container2.visible = false
+				_countdown_lbl.get_parent().visible = false
+		# (GAME_OVER UI is handled in _apply_phase)
 
-		# you’re already handling GAME_OVER UI in _apply_phase(),
-		# so you can leave it out of here if you like.
-		_:
-			pass
 
 
 func _tick_host_phase(delta: float) -> void:
