@@ -56,6 +56,8 @@ onready var hit_sfx : AudioStreamPlayer3D = $HitSound
 var _orig_albedo : Color = Color(1, 1, 1)   # <── add this line
 
 var _ai_enabled := true
+var invincible : bool = false
+var during_countdown := false
 
 ##  Signals  (manager listens to these)
 signal anim_changed(anim_name)
@@ -165,7 +167,6 @@ func _broadcast_attack_to_target(move_name:String, body:Node) -> void:
 		Playroom.RPC.Mode.ALL
 	)
 
-
 func _broadcast_attack(move_name:String) -> void:
 	if not is_host:
 		return
@@ -217,7 +218,22 @@ func _physics_process(delta):
 ## ───────────────────────────────────────────────────────── ##
 ##                     AI STATE MACHINE                     ##
 ## ───────────────────────────────────────────────────────── ##
+
+func set_invincible(enable: bool) -> void:
+	invincible = enable
+	during_countdown = enable
+	# Optional visual feedback:
+	var mat = boss_mesh.get_active_material(0)
+	if mat is SpatialMaterial:
+		if enable:
+			# lighten toward white
+			mat.albedo_color = Color(1,1,1,1).linear_interpolate(_orig_albedo, 0.5)
+		else:
+			mat.albedo_color = _orig_albedo
+
 func _state_machine(delta):
+	if during_countdown:
+		return 
 	state_timer = max(state_timer - delta, 0)
 	target = _pick_target()
 	if not target:
@@ -447,6 +463,7 @@ func _apply_vertical(delta: float) -> void:
 				_vert_vel = 0.0
 
 func apply_damage(amount:int) -> void:
+	if invincible: return
 	health = max(health - amount, 0)
 	emit_signal("health_changed", health)
 	if health > 0 and health <= _next_stagger_hp and not _is_staggered:
@@ -495,13 +512,14 @@ func _direct_steer(dest: Vector3, delta: float) -> void:
 
 
 ## ───────────────  Damage interface  ─────────────── ##
-func take_damage(amount : int) -> void:
-	if not is_host: return
-	health = clamp(health - amount, 0, max_health)
-	emit_signal("health_changed", health)
-	if health == 0:
-		emit_signal("died") 
-		_die()
+#func take_damage(amount : int) -> void:
+#	if invincible: return
+#	if not is_host: return
+#	health = clamp(health - amount, 0, max_health)
+#	emit_signal("health_changed", health)
+#	if health == 0:
+#		emit_signal("died") 
+#		_die()
 
 func _update_hp_bar():
 	hp_bar.value = health

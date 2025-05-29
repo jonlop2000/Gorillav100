@@ -119,32 +119,28 @@ func _on_phase_set(args):
 	_current_phase = phase_val
 	_apply_phase()
 
-#func _on_time_set(args):
-#	if args.size() == 0:
-#		return
-#	var time_val = args[0]
-#	if time_val == null:
-#		return
-#	_phase_time_left = time_val
-#	if _countdown_lbl:
-#		_countdown_lbl.text = str(ceil(_phase_time_left))
-
 func _apply_phase():
 	match _current_phase:
 		Phase.COUNTDOWN:
 			if get_tree().current_scene.filename != ARENA_SCENE.resource_path:
 				start_game()
-			_freeze_all_local_players()  # Freeze everything during countdown
+			if boss_node:
+				boss_node.set_invincible(true)
+				boss_node.during_countdown = true
+				boss_node.sm.travel("KneelToStand")
 			if _countdown_lbl:
 				var container = _countdown_lbl.get_parent()
 				container.visible = true
 		Phase.PLAYING:
-			_unfreeze_all_local_players()  # Unfreeze everything when playing starts
+			if boss_node:
+				boss_node.set_invincible(false)
+				boss_node.during_countdown = false
+				_unfreeze_boss()   # only unfreeze here, not in COUNTDOWN
 			if _countdown_lbl: 
 				var container = _countdown_lbl.get_parent()
 				container.visible = false
 		Phase.GAME_OVER:
-			_freeze_all_local_players()  # Freeze everything during game over
+			_freeze_boss()  # Freeze everything during game over
 			if _gameover_panel:
 				var victory = Playroom.getState("result", false)
 				var text_to_show := "Victory!"
@@ -161,26 +157,15 @@ func _apply_phase():
 # --------------------------------------------------
 #  Freeze / unfreeze every LOCAL player on this client
 # --------------------------------------------------
-func _freeze_all_local_players() -> void:
-	# Freeze all players (local and remote)
-	for entry in players.values():
-		if entry.has("node") and entry.node and is_instance_valid(entry.node):
-			entry.node.freeze_controls()
-	
-	# Freeze boss if it exists
-	if boss_node and is_instance_valid(boss_node):
-		boss_node.freeze_ai()
+func _freeze_boss() -> void:
+	if boss_node:
+		boss_node.freeze_ai()      # your existing “hard stop” for AI
+		boss_node.set_invincible(true)
+		boss_node.during_countdown = true
 
-func _unfreeze_all_local_players() -> void:
-	# Unfreeze all players (local and remote)
-	for entry in players.values():
-		if entry.has("node") and entry.node and is_instance_valid(entry.node):
-			entry.node.unfreeze_controls()
-	
-	# Unfreeze boss if it exists
-	if boss_node and is_instance_valid(boss_node):
+func _unfreeze_boss() -> void:
+	if boss_node:
 		boss_node.unfreeze_ai()
-
 
 ### ----------  MATCH-FLOW  ----------
 func _host_begin_countdown():
@@ -188,14 +173,12 @@ func _host_begin_countdown():
 	_phase_time_left = PRE_GAME_SECONDS
 	Playroom.setState(KEY_PHASE, _current_phase)         # reliable default :contentReference[oaicite:1]{index=1}
 	Playroom.setState(KEY_TIME_LEFT, _phase_time_left)  # we'll spam this once a sec
+	_apply_phase()
 
 func _host_start_gameplay():
 	_current_phase = Phase.PLAYING
 	Playroom.setState(KEY_PHASE, _current_phase)
-	# allow movement
-	for entry in players.values():
-		if entry.node:         
-			entry.node.unfreeze_controls()
+	_apply_phase()
 
 func _host_end_game(victory: bool):
 	_current_phase   = Phase.GAME_OVER
@@ -416,6 +399,8 @@ func _on_player_join(args):
 	if _players_root and players[id].node == null:
 		var node = _spawn_player(state)
 		players[id].node = node
+	
+	state.onQuit(_bridge("_on_player_quit"))
 
 func _on_player_quit(args):
 	var state = args[0]
