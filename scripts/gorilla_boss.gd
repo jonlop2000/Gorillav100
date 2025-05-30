@@ -6,7 +6,7 @@ extends KinematicBody
 ## ───────────────  Tunables  ─────────────── ##
 enum State { IDLE, CHASE, ATTACK, RECOVER, DESPERATION, JUMP, FALL }
 
-export(int)   var max_health := 2000
+export(int)   var max_health := 500
 export(float) var move_speed := 2.0
 export(float) var attack_range := 1.6
 export(float) var rotation_speed := 5.0
@@ -56,7 +56,7 @@ onready var hit_sfx : AudioStreamPlayer3D = $HitSound
 var _orig_albedo : Color = Color(1, 1, 1)   # <── add this line
 
 var _ai_enabled := true
-var is_dead
+var _is_dead := false
 var invincible : bool = false
 var during_countdown := false
 
@@ -463,10 +463,8 @@ func _apply_vertical(delta: float) -> void:
 			else:
 				_vert_vel = 0.0
 
-# at top
-var _is_dead := false
-
 func apply_damage(amount:int) -> void:
+	print("🐵 apply_damage(", amount, ") invincible=", invincible, " dead=", _is_dead, " oldHP=", health)
 	if invincible or _is_dead:
 		return
 	health = max(health - amount, 0)
@@ -536,25 +534,8 @@ func _direct_steer(dest: Vector3, delta: float) -> void:
 	rotation.y = lerp_angle(rotation.y, target_rot, rotation_speed * delta)
 	move_and_slide(dir * move_speed, Vector3.UP)
 
-
-## ───────────────  Damage interface  ─────────────── ##
-#func take_damage(amount : int) -> void:
-#	if invincible: return
-#	if not is_host: return
-#	health = clamp(health - amount, 0, max_health)
-#	emit_signal("health_changed", health)
-#	if health == 0:
-#		emit_signal("died") 
-#		_die()
-
 func _update_hp_bar():
 	hp_bar.value = health
-
-func _die():
-	sm.travel("Death")
-	emit_signal("anim_changed", "Death")
-	set_physics_process(false)
-	nav_agent.set_enabled(false)
 
 ## ───────────────  Utilities  ─────────────── ##
 func get_current_anim() -> String:

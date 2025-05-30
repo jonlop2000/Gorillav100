@@ -110,19 +110,21 @@ func _safe_float_state(key: String, fallback: float) -> float:
 	return float(v)
 
 func _on_phase_set(args):
-	if args.size() == 0:
+	if args.size() == 0 or args[0] == null:
 		return
-	var phase_val = args[0]
-	if phase_val == null:
-		return
-	_current_phase = phase_val
+	var new_phase = int(args[0])
+	print("-- PHASE CHANGE →", new_phase)
+	_current_phase = new_phase
 	_apply_phase()
 
 func _apply_phase():
 	match _current_phase:
 		Phase.LOBBY:
+			print("→ _apply_phase: entering LOBBY")
 			# Everyone returns to the lobby scene & UI
 			_goto_lobby()
+			players_alive.clear()
+			_ready_cache.clear() 
 		Phase.COUNTDOWN:
 			# If we haven’t loaded the arena yet, do so
 			if get_tree().current_scene.filename != ARENA_SCENE.resource_path:
@@ -152,12 +154,13 @@ func _apply_phase():
 				_countdown_lbl.get_parent().visible = false
 
 			# Show Game Over panel with explicit if/else
-			if _gameover_panel:
+			if _gameover_panel and _gameover_panel.has_node("CenterBox/VBox/Title"):
 				var victory = Playroom.getState("result", false)
 				var text_to_show = "Victory!"
 				if not victory:
 					text_to_show = "Game Over"
-				_gameover_panel.get_node("VBox/Title").text = text_to_show
+				_gameover_panel.get_node("UI/GameOverPanel/CenterBox/VBox/Title").text = text_to_show
+				print("→ Showing GameOverPanel; victory =", victory)
 				_gameover_panel.show()
 
 # --------------------------------------------------
@@ -194,11 +197,20 @@ func _host_end_game(victory: bool):
 	Playroom.setState("result", victory)  # true = players win
 
 func _host_return_to_lobby():
-	# 1) Tell everyone we’re in Lobby
+	# 1) Broadcast “we’re in Lobby”
+	print("HOST: returning everyone to LOBBY")
 	_current_phase = Phase.LOBBY
 	Playroom.setState(KEY_TIME_LEFT, 0.0, false)
-	Playroom.setState(KEY_PHASE,       _current_phase)
-	Playroom.setState("result",        null)
+	Playroom.setState(KEY_PHASE,_current_phase)
+	Playroom.setState("result", null)
+
+	# 2) Clear each player’s ready flag so no one is still “ready”
+	for id in players.keys():
+		var state = players[id].state
+		state.setState("ready", false, true)
+
+	# 3) Jump back to lobby locally
+	_apply_phase()
 
 
 # Returns an Array of the current PlayerState objects
@@ -429,6 +441,7 @@ func _on_player_quit(args):
 func _goto_lobby():
 	if get_tree().current_scene == LOBBY_SCENE:
 		return
+	print("→ _goto_lobby: lobby panel visible")
 	get_tree().change_scene_to(LOBBY_SCENE)
 	yield(get_tree(), "idle_frame")
 	_hook_scene_paths()
@@ -549,12 +562,41 @@ func _push_room_init_snapshot():
 		snap.players[id] = _pack_player(players[id].node)
 	Playroom.setState("room.init", JSON.print(snap))
 
+func _update_remote_boss():
+	# 1) Get the raw JSON the host set under "boss"
+	var raw = Playroom.getState("boss")
+	if not raw:
+		return
+	var parsed = JSON.parse(raw)
+	if parsed.error != OK:
+		push_error("Failed to parse boss state JSON")
+		return
+	var state = parsed.result
+	# 2) Bail on empty dicts (e.g. after boss is freed)
+	if not (state is Dictionary) or state.empty():
+		return
+	# 3) Spawn a boss on P2 if needed
+	if not boss_node:
+		boss_node = _spawn_boss()
+	# 4) Safely apply via the boss's own RPC helper
+	if is_instance_valid(boss_node):
+		boss_node.apply_remote_state({
+			"pos":  [state["px"], state["py"], state["pz"]],
+			"rot":   state["rot"],
+			"hp":    state["hp"],
+			"anim":  state["anim"]
+		})
+
+
+
 # ---------------------------------------------------------------------#
 #  Main loops                                                          #
 # ---------------------------------------------------------------------#
 func _physics_process(delta):
 	# ─ Only run in Playroom (HTML5) context ───────────────────────────
 	if not OS.has_feature("HTML5"):
+		return
+	if _current_phase != Phase.COUNTDOWN and _current_phase != Phase.PLAYING:
 		return
 	# ─── HOST: throttle & publish authoritative transforms ─────────────
 	if Playroom.isHost():
@@ -636,17 +678,7 @@ func _physics_process(delta):
 		_accum_boss += delta
 		if _accum_boss >= BOSS_SEND_RATE:
 			_accum_boss -= BOSS_SEND_RATE
-			var raw = Playroom.getState("boss")
-			if raw:
-				var dict = JSON.parse(raw).result
-				if not boss_node:
-					boss_node = _spawn_boss()
-				boss_node.apply_remote_state({
-					"pos":  [dict["px"], dict["py"], dict["pz"]],
-					"rot":   dict["rot"],
-					"hp":    dict["hp"],
-					"anim":  dict["anim"]
-				})
+			_update_remote_boss()
 
 
 # ---------------------------------------------------------------------#
@@ -676,6 +708,8 @@ var _cached_is_host := false
 
 func _process(delta: float) -> void:
 	# 1) State‐polling loop (runs every STATE_POLL_RATE seconds)
+	if _current_phase != Phase.COUNTDOWN and _current_phase != Phase.PLAYING:
+		return
 	_state_poll_accum += delta
 	if _state_poll_accum >= STATE_POLL_RATE:
 		_state_poll_accum -= STATE_POLL_RATE
@@ -704,14 +738,18 @@ func _process(delta: float) -> void:
 	# 3) Local UI updates (every frame)
 	match _current_phase:
 		Phase.COUNTDOWN:
-			if _countdown_lbl:
+			if _countdown_lbl and is_instance_valid(_countdown_lbl):
 				var box = _countdown_lbl.get_parent()
-				box.visible = true
-				_countdown_lbl.text = str(int(ceil(_phase_time_left)))
+				if box:
+					box.visible = true
+					_countdown_lbl.text = str(int(ceil(_phase_time_left)))
+
 		Phase.PLAYING, Phase.LOBBY:
-			if _countdown_lbl:
-				_countdown_lbl.get_parent().visible = false
-		# (GAME_OVER UI is handled in _apply_phase)
+			if _countdown_lbl and is_instance_valid(_countdown_lbl):
+				var box = _countdown_lbl.get_parent()
+				if box:
+					box.visible = false
+	
 
 
 func _tick_host_phase(delta: float) -> void:
@@ -791,8 +829,11 @@ func _on_lost_host():
 func _poll_lobby_state():
 	if not _joined_room or _current_phase != Phase.LOBBY:
 		return
+	# only when you’re actually in the Lobby scene:
+	if get_tree().current_scene.filename != LOBBY_SCENE.resource_path:
+		return
 	for state in get_player_states():
-		var id  = str(state.id)
+		var id = str(state.id)
 		_ready_cache[id] = state.getState("ready") == true
 	if Playroom.isHost() and _all_ready():
-		host_start_match()     # NEW call — no global flag needed
+		host_start_match()

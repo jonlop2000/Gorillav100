@@ -21,6 +21,11 @@ var _ready_cache := {}
 const POLL_RATE := 0.2
 
 func _ready():
+	# 1) Clear out old rows
+	for child in _list.get_children():
+		if child != _template:
+			child.queue_free()
+	
 	_template.visible = false    
 	# 1) Ensure we only ever connect once
 	if not AvatarCache.is_connected("avatar_ready", self, "_on_avatar_ready"):

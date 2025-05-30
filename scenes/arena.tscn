@@ -1,4 +1,4 @@
-[gd_scene load_steps=7 format=2]
+[gd_scene load_steps=8 format=2]
 
 [ext_resource path="res://fonts/PixelifySans-Regular.ttf" type="DynamicFontData" id=1]
 [ext_resource path="res://tiles.tres" type="MeshLibrary" id=2]
@@ -20,6 +20,10 @@ fog_sun_color = Color( 0.921569, 0.941176, 0.909804, 1 )
 
 [sub_resource type="DynamicFont" id=5]
 size = 50
+font_data = ExtResource( 1 )
+
+[sub_resource type="DynamicFont" id=6]
+size = 30
 font_data = ExtResource( 1 )
 
 [node name="arena" type="Spatial"]
@@ -82,13 +86,13 @@ margin_bottom = 40.0
 
 [node name="VBox" type="VBoxContainer" parent="UI/GameOverPanel/CenterBox"]
 margin_left = 20.0
-margin_top = 4.0
 margin_right = 20.0
-margin_bottom = 36.0
+margin_bottom = 55.0
 
 [node name="Title" type="Label" parent="UI/GameOverPanel/CenterBox/VBox"]
-margin_bottom = 14.0
+margin_bottom = 37.0
+custom_fonts/font = SubResource( 6 )
 
 [node name="Info" type="Label" parent="UI/GameOverPanel/CenterBox/VBox"]
-margin_top = 18.0
-margin_bottom = 32.0
+margin_top = 41.0
+margin_bottom = 55.0
