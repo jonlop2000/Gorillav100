@@ -200,6 +200,7 @@ func _host_end_game(victory: bool):
 	Playroom.setState(KEY_PHASE, _current_phase)
 	Playroom.setState(KEY_TIME_LEFT, _phase_time_left, false)
 	Playroom.setState("result", victory)  # true = players win
+	_apply_phase()
 
 func _host_return_to_lobby():
 	# 1) Broadcast “we’re in Lobby”
