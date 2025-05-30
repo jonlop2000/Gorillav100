@@ -464,7 +464,6 @@ func _apply_vertical(delta: float) -> void:
 				_vert_vel = 0.0
 
 func apply_damage(amount:int) -> void:
-	print("🐵 apply_damage(", amount, ") invincible=", invincible, " dead=", _is_dead, " oldHP=", health)
 	if invincible or _is_dead:
 		return
 	health = max(health - amount, 0)
@@ -477,8 +476,8 @@ func apply_damage(amount:int) -> void:
 		_is_dead = true
 		sm.travel("Death")
 		emit_signal("died")
-
-		# once the Death animation finishes, free yourself
+		if Playroom.isHost():
+			Playroom.RPC.call("boss_die", "", Playroom.RPC.Mode.ALL)
 		anim_player.connect(
 			"animation_finished",
 			self,

@@ -77,6 +77,7 @@ func _ready():
 	Playroom.RPC.register("apply_attack", _bridge("_on_apply_attack"))
 	Playroom.RPC.register("jump", _bridge("_on_player_jump"))
 	Playroom.RPC.register("show_hit_effects", _bridge("_on_show_hit_effects"))
+	Playroom.RPC.register("boss_die", _bridge("_on_boss_die_rpc"))
 	Playroom.waitForState(KEY_PHASE, _bridge("_on_phase_set"))
    # ---------------------------------------------------------------------
 	if OS.has_feature("HTML5"):
@@ -125,43 +126,47 @@ func _apply_phase():
 			_goto_lobby()
 			players_alive.clear()
 			_ready_cache.clear() 
+			boss_node = null
 		Phase.COUNTDOWN:
 			# If we haven’t loaded the arena yet, do so
 			if get_tree().current_scene.filename != ARENA_SCENE.resource_path:
 				start_game()
 			# Boss kneels & is invulnerable
-			if boss_node:
+			if boss_node and is_instance_valid(boss_node):
 				boss_node.set_invincible(true)
 				boss_node.during_countdown = true
 				boss_node.sm.travel("KneelToStand")
 			# Show countdown UI
-			if _countdown_lbl:
+			if _countdown_lbl and is_instance_valid(_countdown_lbl):
 				_countdown_lbl.get_parent().visible = true
 		Phase.PLAYING:
 			# Boss becomes vulnerable again and AI resumes
-			if boss_node:
+			if boss_node and is_instance_valid(boss_node):
 				boss_node.set_invincible(false)
 				boss_node.during_countdown = false
 				_unfreeze_boss()
 			# Hide countdown UI
-			if _countdown_lbl:
+			if _countdown_lbl and is_instance_valid(_countdown_lbl):
 				_countdown_lbl.get_parent().visible = false
 		Phase.GAME_OVER:
 			# Stop the boss
 			_freeze_boss()
 			# Make sure countdown UI is hidden
-			if _countdown_lbl:
+			if _countdown_lbl and is_instance_valid(_countdown_lbl):
 				_countdown_lbl.get_parent().visible = false
 
 			# Show Game Over panel with explicit if/else
 			if _gameover_panel and _gameover_panel.has_node("CenterBox/VBox/Title"):
+				var title_lbl = _gameover_panel.get_node("CenterBox/VBox/Title") as Label
 				var victory = Playroom.getState("result", false)
-				var text_to_show = "Victory!"
-				if not victory:
-					text_to_show = "Game Over"
-				_gameover_panel.get_node("UI/GameOverPanel/CenterBox/VBox/Title").text = text_to_show
 				print("→ Showing GameOverPanel; victory =", victory)
+				if victory:
+					title_lbl.text = "Victory!"
+				else:
+					title_lbl.text = "Game Over"
 				_gameover_panel.show()
+			else:
+				push_error("Missing Title label under GameOverPanel!")
 
 # --------------------------------------------------
 #  Freeze / unfreeze every LOCAL player on this client
@@ -198,18 +203,28 @@ func _host_end_game(victory: bool):
 
 func _host_return_to_lobby():
 	# 1) Broadcast “we’re in Lobby”
-	print("HOST: returning everyone to LOBBY")
 	_current_phase = Phase.LOBBY
 	Playroom.setState(KEY_TIME_LEFT, 0.0, false)
-	Playroom.setState(KEY_PHASE,_current_phase)
-	Playroom.setState("result", null)
-
-	# 2) Clear each player’s ready flag so no one is still “ready”
+	Playroom.setState(KEY_PHASE,      _current_phase)
+	Playroom.setState("result",       null)
+	# 2) Clear every player’s ready flag (so we don’t auto-start)
 	for id in players.keys():
-		var state = players[id].state
-		state.setState("ready", false, true)
-
-	# 3) Jump back to lobby locally
+		var st = players[id].state
+		st.setState("ready", false, true)   # reliable send
+		_ready_cache[id] = false            # local cache too
+	# 3) Disconnect & null out old player nodes
+	for id in players.keys():
+		var pnode = players[id].node
+		if pnode and is_instance_valid(pnode):
+			if pnode.is_connected("died", self, "_on_player_died"):
+				pnode.disconnect("died", self, "_on_player_died")
+		players[id].node = null
+	# 4) Disconnect & null out the old boss
+	if boss_node and is_instance_valid(boss_node):
+		if boss_node.is_connected("died", self, "_on_boss_died"):
+			boss_node.disconnect("died", self, "_on_boss_died")
+	boss_node = null
+	# 5) Finally, run the lobby logic locally
 	_apply_phase()
 
 
@@ -220,19 +235,29 @@ func get_player_states() -> Array:
 		out.append(players[id]["state"])
 	return out
 
-func _spawn_player(state):
+func _spawn_player(state) -> Node:
+	# Ensure our _players_root is valid for the current scene
+	if not _players_root or not is_instance_valid(_players_root):
+		_hook_scene_paths()
 	var inst = PLAYER_SCENE.instance()
 	inst.name = "player_%s" % state.id
-	_players_root.add_child(inst)
+	if _players_root and is_instance_valid(_players_root):
+		_players_root.add_child(inst)
+	else:
+		push_error("Cannot spawn player: _players_root is invalid or null!")
 	inst.add_to_group("players")
-
 	if str(state.id) == str(Playroom.me().id):
 		inst.make_local()
 		# HUD
 		var hud = PLAYER_HUD_SCENE.instance()
 		hud.player_path = inst.get_path()
-		if _ui_root:
+		# Ensure _ui_root is valid
+		if not _ui_root or not is_instance_valid(_ui_root):
+			_hook_scene_paths()
+		if _ui_root and is_instance_valid(_ui_root):
 			_ui_root.add_child(hud)
+		else:
+			push_error("Cannot add player HUD: _ui_root is invalid or null!")
 	else:
 		inst.make_remote()
 		# apply any existing position/rotation from state
@@ -248,16 +273,20 @@ func _spawn_player(state):
 	print("%s spawned – local=%s" % [inst.name, inst.is_local])
 	return inst
 
-func _spawn_boss():
+
+func _spawn_boss() -> Node:
+	if not _boss_parent or not is_instance_valid(_boss_parent):
+		_hook_scene_paths()
 	var scene = preload("res://scenes/gorilla_boss.tscn")
 	var inst  = scene.instance()
 	inst.is_host = Playroom.isHost()
 	print("Spawning boss - is_host:", inst.is_host)
 
-	if _boss_parent:
+	if _boss_parent and is_instance_valid(_boss_parent):
 		_boss_parent.add_child(inst)
 	else:
-		push_error("Cannot spawn boss: _boss_parent is null!")
+		push_error("Cannot spawn boss: _boss_parent is invalid or null!")
+
 	return inst
 
 func _pack_player(node:Node) -> Dictionary:
@@ -382,6 +411,18 @@ func _on_player_jump(args:Array) -> void:
 	# tell that player to go into the Jump state
 	players[id].node._begin_jump()
 	
+func _on_boss_die_rpc(_args:Array) -> void:
+	if boss_node and is_instance_valid(boss_node):
+		# Force the Death animation on every client
+		boss_node.sm.travel("Death")
+		# Queue‐free it when that animation finishes, just like the host does
+		boss_node.anim_player.connect(
+			"animation_finished",
+			boss_node,
+			"_on_death_animation_finished",
+			[], CONNECT_ONESHOT
+		)
+
 # ------------------------------------------------------------------#
 #  Lobby / join / quit                                              #
 # ------------------------------------------------------------------#
@@ -464,7 +505,7 @@ func start_game() -> void:
 	# Spawn existing players
 	for id in players.keys():
 		var entry = players[id]
-		if entry.node == null:
+		if entry.node == null or not is_instance_valid(entry.node):
 			entry.node = _spawn_player(entry.state)
 
 	# Spawn boss once
@@ -592,25 +633,26 @@ func _update_remote_boss():
 # ---------------------------------------------------------------------#
 #  Main loops                                                          #
 # ---------------------------------------------------------------------#
-func _physics_process(delta):
-	# ─ Only run in Playroom (HTML5) context ───────────────────────────
+func _physics_process(delta: float) -> void:
+	# ─── Only run in Playroom (HTML5) context ───────────────────────────
 	if not OS.has_feature("HTML5"):
 		return
-	if _current_phase != Phase.COUNTDOWN and _current_phase != Phase.PLAYING:
+
+	# ─── Only in the Arena phases ──────────────────────────────────────
+	if _current_phase != Phase.COUNTDOWN and _current_phase != Phase.PLAYING and _current_phase != Phase.GAME_OVER:
 		return
+
 	# ─── HOST: throttle & publish authoritative transforms ─────────────
 	if Playroom.isHost():
 		_accum_player += delta
 		if _accum_player >= PLAYER_SEND_RATE:
 			_accum_player -= PLAYER_SEND_RATE
-
 			for id in players.keys():
 				var entry = players[id]
 				var node  = entry.node
 				var state = entry.state
 
 				if node == null or not is_instance_valid(node):
-					# clean up so future loops don't see it
 					entry.node = null
 					continue
 
@@ -620,8 +662,8 @@ func _physics_process(delta):
 					for k in packed.keys():
 						state.setState(k, packed[k])
 					continue
-				
-				# 3) otherwise consume snapshots
+
+				# 2) consume snapshots for remote players
 				var px  = state.getState("px")  if state.getState("px")  else node.global_transform.origin.x
 				var py  = state.getState("py")  if state.getState("py")  else node.global_transform.origin.y
 				var pz  = state.getState("pz")  if state.getState("pz")  else node.global_transform.origin.z
@@ -634,34 +676,32 @@ func _physics_process(delta):
 					node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
 				node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
 
-		# ─── HOST: publish boss state ────────────────────────────────────
+		# publish boss state
 		if boss_node:
 			_accum_boss += delta
 			if _accum_boss >= BOSS_SEND_RATE:
 				_accum_boss -= BOSS_SEND_RATE
 				Playroom.setState("boss", JSON.print(_pack_boss()))
 
-	# ─── CLIENTS: poll, publish & interpolate transforms ───────────────
+	# ─── CLIENTS: poll & apply transforms ──────────────────────────────
 	else:
 		_accum_player += delta
 		if _accum_player >= PLAYER_SEND_RATE:
 			_accum_player -= PLAYER_SEND_RATE
-
 			for id in players.keys():
 				var entry = players[id]
 				var node  = entry.node
 				var state = entry.state
-				if not node:
+
+				if node == null or not is_instance_valid(node):
 					continue
 
-				# 1) publish your own state on clients, too!
 				if node.is_local:
 					var packed = _pack_player(node)
 					for k in packed.keys():
 						state.setState(k, packed[k])
 					continue
 
-				# 3) otherwise consume snapshots
 				var px  = state.getState("px")  if state.getState("px")  else node.global_transform.origin.x
 				var py  = state.getState("py")  if state.getState("py")  else node.global_transform.origin.y
 				var pz  = state.getState("pz")  if state.getState("pz")  else node.global_transform.origin.z
@@ -674,11 +714,11 @@ func _physics_process(delta):
 					node.global_transform.origin = node.global_transform.origin.linear_interpolate(target, delta * 8.0)
 				node.rotation.y = lerp_angle(node.rotation.y, rot, delta * 8.0)
 
-		# ─── CLIENTS: poll & apply boss state ────────────────────────────
 		_accum_boss += delta
 		if _accum_boss >= BOSS_SEND_RATE:
 			_accum_boss -= BOSS_SEND_RATE
 			_update_remote_boss()
+
 
 
 # ---------------------------------------------------------------------#
@@ -707,9 +747,7 @@ func _exit_tree():
 var _cached_is_host := false
 
 func _process(delta: float) -> void:
-	# 1) State‐polling loop (runs every STATE_POLL_RATE seconds)
-	if _current_phase != Phase.COUNTDOWN and _current_phase != Phase.PLAYING:
-		return
+	# ─── 1) Always: host migration & phase polling ──────────────────────
 	_state_poll_accum += delta
 	if _state_poll_accum >= STATE_POLL_RATE:
 		_state_poll_accum -= STATE_POLL_RATE
@@ -718,37 +756,35 @@ func _process(delta: float) -> void:
 		_poll_lobby_state()
 
 		if not Playroom.isHost():
-			# ––– Guest: check for phase changes via getState() –––
 			var phase_raw = Playroom.getState(KEY_PHASE)
 			if phase_raw != null:
 				var new_phase = int(phase_raw)
 				if new_phase != _current_phase:
 					_current_phase = new_phase
 					_apply_phase()
-
-			# ––– If we're in COUNTDOWN, keep the timer in sync –––
 			if _current_phase == Phase.COUNTDOWN:
 				var time_raw = Playroom.getState(KEY_TIME_LEFT)
 				if time_raw != null:
 					_phase_time_left = float(time_raw)
-	# 2) Host drives phase‐timers
+
+	# ─── 2) Always on host: drive your phase timers ────────────────────
 	if Playroom.isHost():
 		_tick_host_phase(delta)
 
-	# 3) Local UI updates (every frame)
-	match _current_phase:
-		Phase.COUNTDOWN:
-			if _countdown_lbl and is_instance_valid(_countdown_lbl):
-				var box = _countdown_lbl.get_parent()
-				if box:
-					box.visible = true
-					_countdown_lbl.text = str(int(ceil(_phase_time_left)))
+	# ─── 3) Arena-only UI updates (skip in GAME_OVER & LOBBY) ─────────
+	if _current_phase == Phase.COUNTDOWN:
+		if _countdown_lbl and is_instance_valid(_countdown_lbl):
+			var container = _countdown_lbl.get_parent()
+			if container:
+				container.visible = true
+				_countdown_lbl.text = str(int(ceil(_phase_time_left)))
+	elif _current_phase == Phase.PLAYING:
+		if _countdown_lbl and is_instance_valid(_countdown_lbl):
+			var container = _countdown_lbl.get_parent()
+			if container:
+				container.visible = false
+	# (GAME_OVER UI is handled in _apply_phase(), LOBBY has no per-frame UI)
 
-		Phase.PLAYING, Phase.LOBBY:
-			if _countdown_lbl and is_instance_valid(_countdown_lbl):
-				var box = _countdown_lbl.get_parent()
-				if box:
-					box.visible = false
 	
 
 
@@ -773,7 +809,6 @@ func _tick_host_phase(delta: float) -> void:
 		_:
 			# no ticking in LOBBY or PLAYING
 			pass
-
 
 func _check_host_change():
 	if Playroom == null:
