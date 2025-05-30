@@ -535,9 +535,7 @@ func _on_boss_died():
 	_host_end_game(true)
 
 func _on_player_died(dead_player):
-	# remove that player from our alive list
 	players_alive.erase(dead_player)
-	# if no one’s left, boss wins
 	if players_alive.empty():
 		_host_end_game(false)
 

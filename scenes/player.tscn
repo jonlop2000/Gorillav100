@@ -1,4 +1,4 @@
-[gd_scene load_steps=70 format=2]
+[gd_scene load_steps=71 format=2]
 
 [ext_resource path="res://assets/Soldier/Skin.material" type="Material" id=1]
 [ext_resource path="res://assets/Soldier/Black.material" type="Material" id=2]
@@ -8,6 +8,7 @@
 [ext_resource path="res://assets/Soldier/DarkGreen.material" type="Material" id=6]
 [ext_resource path="res://scripts/player.gd" type="Script" id=7]
 [ext_resource path="res://scenes/playerstateplayback.tres" type="AnimationNodeStateMachinePlayback" id=8]
+[ext_resource path="res://scenes/SpectatorController.gd" type="Script" id=9]
 
 [sub_resource type="CylinderShape" id=1]
 height = 3.2
@@ -3187,7 +3188,7 @@ mesh = SubResource( 14 )
 skin = SubResource( 2 )
 
 [node name="BoneAttachment" type="BoneAttachment" parent="visuals/Soldier/Armature/Skeleton"]
-transform = Transform( 0.382189, -0.764117, -0.519671, 0.71063, 0.602512, -0.363298, 0.59071, -0.230446, 0.773277, -2.20338, 94.004, -126.68 )
+transform = Transform( 0.457492, -0.777297, -0.43187, 0.645752, 0.624309, -0.439596, 0.611317, -0.0777703, 0.787556, 7.01371, 94.1321, -125.771 )
 bone_name = "mixamorig_LeftHand"
 
 [node name="HitArea" type="Area" parent="visuals/Soldier/Armature/Skeleton/BoneAttachment"]
@@ -3227,3 +3228,8 @@ transform = Transform( 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.4, 0 )
 [node name="Camera" type="Camera" parent="camera_mount"]
 transform = Transform( -1, 0, 9.68575e-08, 0, 1, 0, -9.68575e-08, 0, -1, -1.6, 0.7, -6.43843 )
 current = true
+
+[node name="SpectatorCamera" type="Camera" parent="."]
+transform = Transform( -4, 0, -3.8743e-07, 0, 4, 0, 3.8743e-07, 0, -4, 0, 2, -4 )
+fov = 90.0
+script = ExtResource( 9 )
