@@ -61,6 +61,7 @@ onready var _anim : AnimationPlayer = $visuals/Soldier/AnimationPlayer
 onready var hit_area = $visuals/Soldier/Armature/Skeleton/BoneAttachment/HitArea
 
 signal health_changed(hp)
+signal died
 
 func _ready():
 	_tree.active = true   
@@ -117,6 +118,8 @@ func _input(event):
 # ────────────────────────────────────────────────────────────────────
 func _physics_process(delta):
 	_update_animation(delta)
+	if not _input_enabled:
+		return
 	# Jump override
 	if _jump_timer > 0.0:
 		_jump_timer -= delta
@@ -333,6 +336,7 @@ func remote_apply_damage(amount:int) -> void:
 	health = max(health - amount, 0)
 	emit_signal("health_changed", health)
 	if health <= 0:
+		emit_signal("died")  
 		_travel("Death")
 	# no more _travel("Hit") here
 
@@ -377,3 +381,14 @@ func _update_animation(delta):
 		_travel("JogFwd")
 	elif speed < 0.05:       # was 0.15
 		_travel("Idle")
+		
+# --------------------------------------------------
+#  Match-flow helpers (freeze / unfreeze)
+# --------------------------------------------------
+var _input_enabled := true      # new backing flag
+
+func freeze_controls() -> void:
+	_input_enabled = false
+
+func unfreeze_controls() -> void:
+	_input_enabled = true

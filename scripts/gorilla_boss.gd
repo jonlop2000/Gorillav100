@@ -6,7 +6,7 @@ extends KinematicBody
 ## ───────────────  Tunables  ─────────────── ##
 enum State { IDLE, CHASE, ATTACK, RECOVER, DESPERATION, JUMP, FALL }
 
-export(int)   var max_health := 2000
+export(int)   var max_health := 500
 export(float) var move_speed := 2.0
 export(float) var attack_range := 1.6
 export(float) var rotation_speed := 5.0
@@ -55,10 +55,15 @@ onready var hit_particles : CPUParticles = $visual/GorillaBossGD/Armature/Skelet
 onready var hit_sfx : AudioStreamPlayer3D = $HitSound
 var _orig_albedo : Color = Color(1, 1, 1)   # <── add this line
 
+var _ai_enabled := true
+var _is_dead := false
+var invincible : bool = false
+var during_countdown := false
 
 ##  Signals  (manager listens to these)
 signal anim_changed(anim_name)
 signal health_changed(hp)
+signal died 
 
 var moves = {
 	"Melee": {"range":1.0, "cooldown":2.0,  "weight":5, "knockback": 2.0, "damage":0, "func":"_do_melee"},
@@ -163,7 +168,6 @@ func _broadcast_attack_to_target(move_name:String, body:Node) -> void:
 		Playroom.RPC.Mode.ALL
 	)
 
-
 func _broadcast_attack(move_name:String) -> void:
 	if not is_host:
 		return
@@ -190,8 +194,8 @@ func _broadcast_attack(move_name:String) -> void:
 
 ## ───────────────  Host‑only physics / AI  ─────────────── ##
 func _physics_process(delta):
-#	if _test_freeze:
-#		return
+	if not _ai_enabled or _is_dead:
+		return
 	_update_stagger(delta) 
 	if _is_staggered:
 		_update_hp_bar()
@@ -215,7 +219,22 @@ func _physics_process(delta):
 ## ───────────────────────────────────────────────────────── ##
 ##                     AI STATE MACHINE                     ##
 ## ───────────────────────────────────────────────────────── ##
+
+func set_invincible(enable: bool) -> void:
+	invincible = enable
+	during_countdown = enable
+	# Optional visual feedback:
+	var mat = boss_mesh.get_active_material(0)
+	if mat is SpatialMaterial:
+		if enable:
+			# lighten toward white
+			mat.albedo_color = Color(1,1,1,1).linear_interpolate(_orig_albedo, 0.5)
+		else:
+			mat.albedo_color = _orig_albedo
+
 func _state_machine(delta):
+	if during_countdown:
+		return 
 	state_timer = max(state_timer - delta, 0)
 	target = _pick_target()
 	if not target:
@@ -445,12 +464,35 @@ func _apply_vertical(delta: float) -> void:
 				_vert_vel = 0.0
 
 func apply_damage(amount:int) -> void:
+	if invincible or _is_dead:
+		return
 	health = max(health - amount, 0)
 	emit_signal("health_changed", health)
+
 	if health > 0 and health <= _next_stagger_hp and not _is_staggered:
 		_enter_stagger()
+
 	if health <= 0:
+		_is_dead = true
 		sm.travel("Death")
+		emit_signal("died")
+		if Playroom.isHost():
+			Playroom.RPC.call("boss_die", "", Playroom.RPC.Mode.ALL)
+		anim_player.connect(
+			"animation_finished",
+			self,
+			"_on_death_animation_finished",
+			[], CONNECT_ONESHOT
+		)
+
+func _on_death_animation_finished(anim_name:String) -> void:
+	if anim_name == "Death":
+		call_deferred("queue_free")
+
+
+func _on_animation_finished(anim_name:String):
+	if anim_name == "Death":
+		call_deferred("queue_free")
 
 func _enter_stagger() -> void:
 	if _is_staggered: return
@@ -491,23 +533,8 @@ func _direct_steer(dest: Vector3, delta: float) -> void:
 	rotation.y = lerp_angle(rotation.y, target_rot, rotation_speed * delta)
 	move_and_slide(dir * move_speed, Vector3.UP)
 
-
-## ───────────────  Damage interface  ─────────────── ##
-func take_damage(amount : int) -> void:
-	if not is_host: return
-	health = clamp(health - amount, 0, max_health)
-	emit_signal("health_changed", health)
-	if health == 0:
-		_die()
-
 func _update_hp_bar():
 	hp_bar.value = health
-
-func _die():
-	sm.travel("Death")
-	emit_signal("anim_changed", "Death")
-	set_physics_process(false)
-	nav_agent.set_enabled(false)
 
 ## ───────────────  Utilities  ─────────────── ##
 func get_current_anim() -> String:
@@ -535,4 +562,9 @@ func _react_to_hit() -> void:
 	_emit_hit_particles()
 	_play_hit_sfx()
 
+# ----- AI enable flag -----
+func freeze_ai() -> void:
+	_ai_enabled = false
 
+func unfreeze_ai() -> void:
+	_ai_enabled = true
