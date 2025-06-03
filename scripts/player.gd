@@ -95,17 +95,19 @@ func make_local():
 		connect("died", self, "_on_local_died")
 
 func _on_local_died(_dead_player = null):
+	if not is_local:
+		return   # only do this on your own client
 	# disable live controls
 	_input_enabled = false
 	set_process_input(false)
+	# remove from “players” so your local boss AI (if any) stops targeting you
 	if is_in_group("players"):
 		remove_from_group("players")
-	# hide your character mesh
-	$visuals/Soldier/Armature/Skeleton/Body.visible = false   # adjust path as needed
-	# switch cameras
+	# hide your body mesh
+	$visuals/Soldier/Armature/Skeleton/Body.visible = false
+	# switch off your FPS camera and turn on spectator
 	_camera.current = false
 	$SpectatorCamera.set_enabled(true)
-
 
 func make_remote():
 	print("📍 make_remote called on ", name)
@@ -113,7 +115,6 @@ func make_remote():
 	set_process_input(false)
 	_camera.current = false
 	$SpectatorCamera.set_enabled(false)
-
 
 # ────────────────────────────────────────────────────────────────────
 #  Input
@@ -358,8 +359,10 @@ func remote_apply_damage(amount:int) -> void:
 	health = max(health - amount, 0)
 	emit_signal("health_changed", health)
 	if health <= 0:
-		emit_signal("died", self)
 		_travel("Death")
+		if is_in_group("players"):
+			remove_from_group("players")
+		emit_signal("died", self)
 
 func remote_apply_knockback(dir:Vector3, force:float, anim:String="KnockBack") -> void:
 	_kb_vel   = dir * force

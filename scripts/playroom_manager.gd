@@ -240,19 +240,25 @@ func _spawn_player(state) -> Node:
 	# Ensure our _players_root is valid for the current scene
 	if not _players_root or not is_instance_valid(_players_root):
 		_hook_scene_paths()
+
 	var inst = PLAYER_SCENE.instance()
 	inst.name = "player_%s" % state.id
+
 	if _players_root and is_instance_valid(_players_root):
 		_players_root.add_child(inst)
 	else:
 		push_error("Cannot spawn player: _players_root is invalid or null!")
+
 	inst.add_to_group("players")
-	if str(state.id) == str(Playroom.me().id):
+
+	# Decide local vs. remote based on ID
+	var local_id = str(Playroom.me().id)
+	var this_id  = str(state.id)
+	if this_id == local_id:
 		inst.make_local()
-		# HUD
+		# HUD (only for the local player)
 		var hud = PLAYER_HUD_SCENE.instance()
 		hud.player_path = inst.get_path()
-		# Ensure _ui_root is valid
 		if not _ui_root or not is_instance_valid(_ui_root):
 			_hook_scene_paths()
 		if _ui_root and is_instance_valid(_ui_root):
@@ -261,7 +267,7 @@ func _spawn_player(state) -> Node:
 			push_error("Cannot add player HUD: _ui_root is invalid or null!")
 	else:
 		inst.make_remote()
-		# apply any existing position/rotation from state
+		# initialize remote’s transform to whatever the state says
 		var px = state.getState("px")
 		if px != null:
 			var py = state.getState("py")
@@ -500,25 +506,45 @@ func _show_lobby_panel():
 func start_game() -> void:
 	get_tree().change_scene_to(ARENA_SCENE)
 	yield(get_tree(), "idle_frame")
+
 	_hide_lobby_panel()
 	_hook_scene_paths()
 
-	# Spawn existing players
+	# 2.A) Spawn any missing player nodes
 	for id in players.keys():
 		var entry = players[id]
 		if entry.node == null or not is_instance_valid(entry.node):
 			entry.node = _spawn_player(entry.state)
 
-	# Spawn boss once
+	# 2.B) For every player node, reset camera state & re‐invoke local/remote
+	var local_id = str(Playroom.me().id)
+	for id in players.keys():
+		var entry = players[id]
+		var node  = entry.node
+		if not node or not is_instance_valid(node):
+			continue
+
+		# Force both cameras OFF before re‐initializing
+		node._camera.current = false
+		if node.has_node("SpectatorCamera"):
+			node.get_node("SpectatorCamera").set_enabled(false)
+
+		# Now re‐call make_local()/make_remote() so that:
+		#  - local player gets its FPS camera on, input enabled
+		#  - remote players get both cameras off, input disabled
+		if str(entry.state.id) == local_id:
+			node.make_local()
+		else:
+			node.make_remote()
+
+	# Spawn boss (if not already present)
 	if boss_node == null:
 		boss_node = _spawn_boss()
 
-	# Only the host sets up end‐game logic
+	# Only the host hooks up end‐game logic
 	if Playroom.isHost():
-		# 1) Boss death → players win
 		boss_node.connect("died", self, "_on_boss_died")
 
-		# 2) Player death → track survivors
 		players_alive.clear()
 		for id in players.keys():
 			var p = players[id].node
