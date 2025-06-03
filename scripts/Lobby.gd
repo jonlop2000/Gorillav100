@@ -93,14 +93,21 @@ func _on_start_pressed():
 
 func _on_player_join(args):
 	var state  = args[0]
-	_add_or_update_row(state )
+	_add_or_update_row(state)
 	state.onQuit(_bridge("_on_player_quit"))
+	
+	_refresh_player_rows()
+	_refresh_start_button()
 
 func _on_player_quit(args):
 	var id = str(args[0].id)
 	if _list.has_node(id):
 		_list.get_node(id).queue_free()
-	_refresh_start_button()    
+
+	# ─── IMMEDIATELY refresh both the player list AND the Start button ───
+	_refresh_player_rows()
+	_refresh_start_button()
+
 
 func _on_ready_state(args):
 	var p_state = args[0]
