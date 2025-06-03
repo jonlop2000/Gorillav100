@@ -94,7 +94,7 @@ func _on_start_pressed():
 func _on_player_join(args):
 	var state  = args[0]
 	_add_or_update_row(state )
-	state.onQuit(_bridge("onPlayerQuit"))
+	state.onQuit(_bridge("_on_player_quit"))
 
 func _on_player_quit(args):
 	var id = str(args[0].id)
@@ -129,9 +129,20 @@ func _process(delta):
 		_refresh_player_rows()
 
 func _refresh_player_rows():
+	var active_ids = []
+	# 1) Gather all currently joined player IDs and ensure their rows exist
 	for p in PlayroomManager.get_player_states():
+		var id = str(p.id)
+		active_ids.append(id)
 		_add_or_update_row(p)
 
+	# 2) Remove any leftover rows for players who have quit
+	for row in _list.get_children():
+		if row == _template:
+			continue
+		if not active_ids.has(row.name):
+			row.queue_free()
+
 func _exit_tree():
-	_js_refs.clear()   # dropping refs is enough in Godot 3.x
+	_js_refs.clear()  
 

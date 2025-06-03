@@ -66,11 +66,11 @@ signal health_changed(hp)
 signal died 
 
 var moves = {
-	"Melee": {"range":1.0, "cooldown":2.0,  "weight":5, "knockback": 2.0, "damage":0, "func":"_do_melee"},
-	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":3, "knockback": 2.0, "damage":0, "func":"_do_combo"},
-	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 6.0, "damage":0, "func":"_do_swing"},
-	"BattleCry": {"range":2.0, "cooldown":2.0, "weight":0.5, "knockback": 5.0, "damage":0, "func":"_do_battlecry"},
-	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0, "damage":0,  "func":"_do_despair_combo", "desperation_only":true}
+	"Melee": {"range":1.0, "cooldown":2.0,  "weight":5, "knockback": 2.0, "damage":9, "func":"_do_melee"},
+	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":3, "knockback": 2.0, "damage":14, "func":"_do_combo"},
+	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 6.0, "damage":18, "func":"_do_swing"},
+	"BattleCry": {"range":2.0, "cooldown":2.0, "weight":0.5, "knockback": 5.0, "damage":2, "func":"_do_battlecry"},
+	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0, "damage":20,  "func":"_do_despair_combo", "desperation_only":true}
 }
 
 ## ───────────────  Setup  ─────────────── ##

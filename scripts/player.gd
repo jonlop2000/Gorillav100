@@ -82,16 +82,39 @@ func _notification(what):
 #  External initialisation helpers (called by the manager)
 # ────────────────────────────────────────────────────────────────────
 func make_local():
+	print("📍 make_local called on ", name)
 	is_local = true
+	_input_enabled = true
 	set_process_input(true)
 	_camera.current = true
+	$visuals/Soldier/Armature/Skeleton/Body.visible = true
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	# after setting up the local camera...
+	$SpectatorCamera.set_enabled(false)
+	if not is_connected("died", self, "_on_local_died"):
+		connect("died", self, "_on_local_died")
+
+func _on_local_died(_dead_player = null):
+	if not is_local:
+		return   # only do this on your own client
+	# disable live controls
+	_input_enabled = false
+	set_process_input(false)
+	# remove from “players” so your local boss AI (if any) stops targeting you
+	if is_in_group("players"):
+		remove_from_group("players")
+	# hide your body mesh
+	$visuals/Soldier/Armature/Skeleton/Body.visible = false
+	# switch off your FPS camera and turn on spectator
+	_camera.current = false
+	$SpectatorCamera.set_enabled(true)
 
 func make_remote():
+	print("📍 make_remote called on ", name)
 	is_local = false
-	set_process_input(false)   # no local input
+	set_process_input(false)
 	_camera.current = false
-	# keep _physics_process ⇒ still want to update animations
+	$SpectatorCamera.set_enabled(false)
 
 # ────────────────────────────────────────────────────────────────────
 #  Input
@@ -336,9 +359,10 @@ func remote_apply_damage(amount:int) -> void:
 	health = max(health - amount, 0)
 	emit_signal("health_changed", health)
 	if health <= 0:
-		emit_signal("died")  
 		_travel("Death")
-	# no more _travel("Hit") here
+		if is_in_group("players"):
+			remove_from_group("players")
+		emit_signal("died", self)
 
 func remote_apply_knockback(dir:Vector3, force:float, anim:String="KnockBack") -> void:
 	_kb_vel   = dir * force
