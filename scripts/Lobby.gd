@@ -20,25 +20,42 @@ var _poll_accum := 0.0
 var _ready_cache := {}
 const POLL_RATE := 0.2
 
-func _ready():
-	# 1) Clear out old rows
+func _ready() -> void:
+	# Hide the template immediately
+	_template.visible = false
+	# Start polling until Playroom comes alive
+	call_deferred("_wait_for_playroom")
+
+# --------------  deferred bootstrap --------------
+func _wait_for_playroom() -> void:
+	if Playroom == null:
+		# JavaScript bridge not ready yet – try again next frame
+		call_deferred("_wait_for_playroom")
+		return
+
+	_do_initial_setup()
+
+# --------------  former contents of _ready() --------------
+func _do_initial_setup() -> void:
+	# 1) Clear rows
 	for child in _list.get_children():
 		if child != _template:
 			child.queue_free()
-	
-	_template.visible = false    
-	# 1) Ensure we only ever connect once
+
+	# 2) Avatar-ready hookup (once)
 	if not AvatarCache.is_connected("avatar_ready", self, "_on_avatar_ready"):
 		AvatarCache.connect("avatar_ready", self, "_on_avatar_ready")
 
-	# 2) Now build the UI
-	_start_btn.visible = Playroom.isHost()
-	_start_btn.disabled = true
+	# 3) Build UI for existing players
+	_start_btn.visible   = Playroom.isHost()
+	_start_btn.disabled  = true
 
 	for p in PlayroomManager.get_player_states():
 		_add_or_update_row(p)
 
+	# 4) Wire Playroom signals & buttons
 	Playroom.onPlayerJoin(_bridge("_on_player_join"))
+	
 	_ready_btn.connect("pressed", self, "_on_ready_pressed")
 	_start_btn.connect("pressed", self, "_on_start_pressed")
 

@@ -6,19 +6,24 @@ extends KinematicBody
 ## ───────────────  Tunables  ─────────────── ##
 enum State { IDLE, CHASE, ATTACK, RECOVER, DESPERATION, JUMP, FALL }
 
-export(int)   var max_health := 500
+export(float) var base_hp := 2000.0   # solo baseline
+export(float) var hp_exponent  := 0.85     # sub-linear scaling
 export(float) var move_speed := 2.0
 export(float) var attack_range := 1.6
 export(float) var rotation_speed := 5.0
 export(float) var jump_speed = 12.0
+export(float) var time_above_threshold := 0.35
 export(float) var jump_height_threshold = 1.5 
+export(float) var drop_height_threshold := 1.0
 export(float) var gravity = 9.8
 export(bool) var _test_freeze := true
 ## ───────────────  Runtime  ─────────────── ##
 
 var Playroom = JavaScript.get_interface("Playroom")
 
-var health : int  = max_health
+var _jump_eligibility_timer := 0.0
+var max_health : int           # runtime only
+var health : int           # runtime only
 var state : int  = State.IDLE
 var state_timer : float = 0.0
 var target = null
@@ -31,6 +36,7 @@ var _last_used = {}
 var _vert_vel: float = 0.0 
 var _velocity: Vector3 = Vector3.ZERO
 var _airborne: bool = false
+var _was_grounded := false
 var _grounded : bool = false
 var _attack_active := false
 var _hit_targets := []        # list of player IDs already hit this attack
@@ -68,17 +74,21 @@ signal died
 var moves = {
 	"Melee": {"range":1.0, "cooldown":2.0,  "weight":5, "knockback": 2.0, "damage":9, "func":"_do_melee"},
 	"MeleeCombo": {"range":1.0, "cooldown":2.0,  "weight":3, "knockback": 2.0, "damage":14, "func":"_do_combo"},
-	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 6.0, "damage":18, "func":"_do_swing"},
+	"360Swing": {"range":2.0, "cooldown":3.0,  "weight":1.5, "knockback": 6.0, "damage":19, "func":"_do_swing"},
 	"BattleCry": {"range":2.0, "cooldown":2.0, "weight":0.5, "knockback": 5.0, "damage":2, "func":"_do_battlecry"},
 	"HurricaneKick": {"range":2.0,"cooldown":4.0,  "weight":1, "knockback": 10.0, "damage":20,  "func":"_do_despair_combo", "desperation_only":true}
 }
 
 ## ───────────────  Setup  ─────────────── ##
 func _ready():
+	var pcount = PlayroomManager.get_lobby_player_count()
+	max_health = int(base_hp * pow(pcount, hp_exponent))
+	health = max_health
+	_next_stagger_hp = int(max_health * 0.75)
+	
 	hp_bar.min_value = 0
 	hp_bar.max_value = max_health
 	hp_bar.value = health
-	_next_stagger_hp = int(max_health * 0.75)
 	anim_tree.active = true
 	_target_pos = global_transform.origin
 	_target_rot_y = rotation.y
@@ -256,8 +266,21 @@ func _state_machine(delta):
 				_enter_state(State.ATTACK)
 			else:
 				var dy = target.global_transform.origin.y - global_transform.origin.y
-				if _grounded and dy > jump_height_threshold:
-					_enter_state(State.JUMP)
+				if _grounded:
+					# ───── Up-jump only when the player is really above and stays there ─────
+					if dy > jump_height_threshold and target.is_on_floor():
+						_jump_eligibility_timer += delta
+						if _jump_eligibility_timer >= time_above_threshold:
+							_enter_state(State.JUMP)
+							_jump_eligibility_timer = 0.0
+					else:
+						_jump_eligibility_timer = 0.0      # reset whenever conditions fail
+
+					# (your existing ledge-hop / drop tests can stay right below this)
+					if dy < -0.2 and not $LedgeProbe.is_colliding():
+						_enter_state(State.JUMP)
+					elif dy < -drop_height_threshold:
+						_enter_state(State.FALL)
 
 		State.JUMP:
 			if not _airborne and not _grounded:
@@ -282,7 +305,7 @@ func _state_machine(delta):
 	if state == State.CHASE and target:
 		_move_toward(target.global_transform.origin, delta)
 	
-	elif state == State.JUMP:
+	elif state == State.JUMP or state == State.FALL:
 		var dir = (target.global_transform.origin - global_transform.origin)
 		dir.y = 0
 		dir = dir.normalized() * move_speed
@@ -312,6 +335,14 @@ func _enter_state(new_state: int) -> void:
 			nav_agent.set_physics_process(false)
 			_vert_vel = jump_speed
 			_airborne = false
+			var fwd = -global_transform.basis.z.normalized()
+			_velocity.x = fwd.x * move_speed * 1.2
+			_velocity.z = fwd.z * move_speed * 1.2
+		State.FALL:
+			sm.travel("Run")
+			nav_agent.set_physics_process(false)
+			_vert_vel = 0.0
+			_airborne = true
 
 func _pick_target():
 	var players = get_tree().get_nodes_in_group("players")
@@ -453,15 +484,18 @@ func _move_toward(dest: Vector3, delta: float) -> void:
 	_velocity = move_and_slide(full_vel, Vector3.UP)
 
 func _apply_vertical(delta: float) -> void:
-	match state:
-		State.JUMP:
+	var now_grounded = _grounded         # you already set this each frame
+	if state == State.JUMP:
+		_vert_vel -= gravity * delta
+
+	else:
+		if _was_grounded and not now_grounded:
+			_vert_vel = -0.1             
+		if now_grounded:
+			_vert_vel = 0.0
+		else:
 			_vert_vel -= gravity * delta
-		_:
-			# fall when not grounded
-			if not _grounded:
-				_vert_vel -= gravity * delta
-			else:
-				_vert_vel = 0.0
+	_was_grounded = now_grounded
 
 func apply_damage(amount:int) -> void:
 	if invincible or _is_dead:

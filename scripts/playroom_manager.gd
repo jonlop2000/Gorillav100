@@ -483,6 +483,9 @@ func _on_player_quit(args):
 	# remove the player entry
 	players.erase(id)
 
+func get_lobby_player_count():
+	return max(1, len(players.keys()))
+
 # ------------------------------------------------------------------#
 #  Scene helpers                                                    #
 # ------------------------------------------------------------------#
